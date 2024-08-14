@@ -20,11 +20,13 @@ ASSISTments2012: [download](https://drive.google.com/file/d/0BxCxNjHXlkkHczVDT2k
 
 Junyi: [download](http://base.ustc.edu.cn/data/JunyiAcademy_Math_Practicing_Log/junyi.rar)
   
-# Training and Testing SQGKT
-python train_test.py
+# Examples to run the model
 
-
-
+## ASSIST12 dataset
+* Command
+```
+python train_test.py 
+```
 
 # References Projects
 
@@ -41,3 +43,6 @@ python train_test.py
 5.https://github.com/tswsxk/EduData
 
 5.https://github.com/pykt-team/pykt-toolkit/tree/main/examples
+
+If you have more questions about our experiments, you can contact us. 
+email: zyy933@henu.edu.cn
