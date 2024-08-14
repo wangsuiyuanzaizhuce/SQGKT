@@ -10,9 +10,7 @@ The requiring environments is as bellow:
 - Pandas 1.2.4
 
 # Data and Data Preprocessing
-We provide the data processed by ASSISTments2009. If you want to process it yourself, 
-please click the link below to download the original dataset, 
-and then run the data_process.py file to process the data.
+We provide the processed ASSISTments2009 data in the data folder. If you want to process it yourself, please click the link below to download the original dataset, and then run the data_process.py file to process the data.
 
 
 # Datasets
@@ -23,6 +21,7 @@ ASSISTments2012: [download](https://drive.google.com/file/d/0BxCxNjHXlkkHczVDT2k
 Junyi: [download](http://base.ustc.edu.cn/data/JunyiAcademy_Math_Practicing_Log/junyi.rar)
   
 # Training and Testing SQGKT
+python train_test.py
 
 
 
