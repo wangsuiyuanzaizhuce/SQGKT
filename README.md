@@ -10,7 +10,9 @@ The requiring environments is as bellow:
 - Pandas 1.2.4
 
 # Data and Data Preprocessing
-We list the command to run the SQGKT on different datasets. 
+We provide the data processed by ASSISTments2009. If you want to process it yourself, 
+please click the link below to download the original dataset, 
+and then run the data_process.py file to process the data.
 
 
 # Datasets
