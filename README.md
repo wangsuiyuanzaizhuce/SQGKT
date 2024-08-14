@@ -8,7 +8,12 @@ ASSISTments2012: [download](https://drive.google.com/file/d/0BxCxNjHXlkkHczVDT2k
 
 Junyi: [download](http://base.ustc.edu.cn/data/JunyiAcademy_Math_Practicing_Log/junyi.rar)
 
-# Code structure
+# Setup
+The requiring environments is as bellow:
+
+# Training and Testing SQGKT
+
+
 
 
 # References
