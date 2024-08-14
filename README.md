@@ -22,7 +22,7 @@ Junyi: [download](http://base.ustc.edu.cn/data/JunyiAcademy_Math_Practicing_Log/
   
 # Examples to run the model
 
-## ASSIST12 dataset
+## ASSISTments2009 dataset
 * Command
 ```
 python train_test.py 
