@@ -10,7 +10,7 @@ The requiring environments is as bellow:
 - Pandas 1.2.4
 
 # Data and Data Preprocessing
-We provide the processed ASSISTments2009 data in the data folder. If you want to process it yourself, please click the link below to download the original dataset, and then run the data_process.py file to process the data.
+We provide the processed ASSISTments2009 data in the data folder. If you want to process it yourself, please click the link below to download the original dataset.
 
 
 # Datasets
