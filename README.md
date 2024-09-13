@@ -1,6 +1,3 @@
-# SQGKT
-The code is related to the paper SQGKT: Student-Question Interaction Graph-based Knowledge Tracing.
-
 # Setup
 The requiring environments is as bellow:
 - Python 3.7+
