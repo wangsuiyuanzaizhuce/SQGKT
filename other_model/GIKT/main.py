@@ -24,7 +24,7 @@ def main():
     arg_parser.add_argument("--lr", type=float, default=0.001)
     arg_parser.add_argument("--lr_decay", type=float, default=0.92)
     arg_parser.add_argument('--checkpoint_dir', type=str, default='checkpoint')
-    arg_parser.add_argument('--dropout_keep_probs', nargs='?', default=[0.6,0.8,1])
+    arg_parser.add_argument('--dropout_keep_probs', nargs='?', default=[0.8])
     arg_parser.add_argument('--aggregator', type=str, default='sum')
     arg_parser.add_argument('--model', type=str, default='dkt')
     arg_parser.add_argument('--l2_weight', type=float, default=1e-8)
