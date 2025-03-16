@@ -1,6 +1,6 @@
 import tensorflow as tf
 class Layer1(tf.keras.layers.Layer):
-    def __init__(self,num_units,d = 10,k = 0.3,b = 0.3,name = 'lb'):
+    def __init__(self,num_units,d = 10,k = 0.3,b = 0.7,name = 'lb'):
         super(Layer1,self).__init__()
         self.weight = self.add_weight(name= 'weight2',shape = (2 * num_units,num_units),initializer = tf.keras.initializers.GlorotNormal(),regularizer='l2',trainable=True)
         self.bias = self.add_weight(name = 'bias',shape= (1,num_units),initializer = tf.keras.initializers.GlorotNormal(),regularizer='l2',trainable= True)
