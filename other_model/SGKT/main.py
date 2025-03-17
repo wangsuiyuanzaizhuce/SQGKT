@@ -32,7 +32,7 @@ def main():
     arg_parser.add_argument("--input_trans_size", type=int, default=100)
     arg_parser.add_argument("--batch_size", type=int, default=6)
     arg_parser.add_argument("--select_index", type=int, default=[0,1, 2])
-    arg_parser.add_argument('--num_epochs', type=int, default=4)
+    arg_parser.add_argument('--num_epochs', type=int, default=100)
     arg_parser.add_argument('--n_hop', type=int, default=3)
     arg_parser.add_argument('--skill_neighbor_num', type=int, default=4)
     arg_parser.add_argument('--question_neighbor_num', type=int, default=4)
