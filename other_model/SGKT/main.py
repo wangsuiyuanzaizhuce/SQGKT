@@ -25,7 +25,7 @@ def main():
     arg_parser.add_argument('--l2_weight', type=float, default=1e-8)
     arg_parser.add_argument('--limit_max_len',type=int,default=200)
     arg_parser.add_argument('--limit_min_len',type=int,default=3)
-    arg_parser.add_argument('--dataset', type=str, default='ednet_5000_3')
+    arg_parser.add_argument('--dataset', type=str, default='assist12_3')
     arg_parser.add_argument("--field_size", type=int, default=3)
     arg_parser.add_argument("--embedding_size", type=int, default=100)
     arg_parser.add_argument("--max_step", type=int, default=200)
