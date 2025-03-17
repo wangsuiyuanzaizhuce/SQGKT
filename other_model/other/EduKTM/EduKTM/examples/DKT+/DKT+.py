@@ -12,8 +12,8 @@ test = etl("../../data/a0910c/test.json", batch_size)
 
 logging.getLogger().setLevel(logging.INFO)
 
-dkt_plus = DKTPlus(ku_num=146, hidden_num=100, loss_params={"lr": 0.1, "lw1": 0.5, "lw2": 0.5})
-dkt_plus.train(train, valid, epoch=2)
+dkt_plus = DKTPlus(ku_num=146, hidden_num=200, loss_params={"lr": 0.01, "lw1": 0.5, "lw2": 0.5})
+dkt_plus.train(train, valid, epoch=100)
 dkt_plus.save("dkt+.params")
 
 dkt_plus.load("dkt+.params")
