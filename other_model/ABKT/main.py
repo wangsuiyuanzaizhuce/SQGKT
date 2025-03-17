@@ -44,7 +44,7 @@ def parse_args():
                         help='Weather use protrained knowledge module or not. Default is True.')
 
     # hyper-parameters in ability module
-    parser.add_argument('--AM_k', type=int, default=32,
+    parser.add_argument('--AM_k', type=int, default=64,
                         help='The dimensionality of ability model, namely k_A,. Default is 32.')
 
     parser.add_argument('--AM_lambda', type=float, default=0.1,
