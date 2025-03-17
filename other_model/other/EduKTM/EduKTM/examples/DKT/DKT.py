@@ -26,7 +26,7 @@ test_loader = get_data_loader('../../data/2009_skill_builder_data_corrected/test
 logging.getLogger().setLevel(logging.INFO)
 
 dkt = DKT(NUM_QUESTIONS, HIDDEN_SIZE, NUM_LAYERS)
-dkt.train(train_loader, epoch=2)
+dkt.train(train_loader, epoch=100)
 dkt.save("dkt.params")
 
 dkt.load("dkt.params")
