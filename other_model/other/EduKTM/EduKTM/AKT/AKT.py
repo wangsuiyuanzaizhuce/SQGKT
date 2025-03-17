@@ -184,7 +184,7 @@ class AKT(KTM):
         self.akt_net = AKTNet(n_question=n_question, n_pid=n_pid, n_blocks=n_blocks, d_model=d_model, dropout=dropout,
                               kq_same=kq_same, l2=l2, separate_qa=separate_qa).to(device)
 
-    def train(self, train_data, test_data=None, *, epoch: int, lr=0.002) -> ...:
+    def train(self, train_data, test_data=None, *, epoch: int, lr=0.0005) -> ...:
         optimizer = torch.optim.Adam(self.akt_net.parameters(), lr=lr, betas=(0.0, 0.999), eps=1e-8)
 
         for idx in range(epoch):
