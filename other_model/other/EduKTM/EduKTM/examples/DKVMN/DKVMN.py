@@ -6,9 +6,9 @@ from EduKTM import DKVMN
 from load_data import Data
 
 params = {
-    'max_iter': 300, # 'number of iterations'
+    'max_iter': 100, # 'number of iterations'
     'init_std': 0.1, # 'weight initialization std'
-    'init_lr': 0.01, # 'initial learning rate'
+    'init_lr': 0.05, # 'initial learning rate'
     'lr_decay': 0.75, # 'learning rate decay'
     'final_lr': 1E-5, # 'learning rate will not decrease after hitting this threshold'
     'momentum': 0.9, # 'momentum rate'
