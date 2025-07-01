@@ -19,7 +19,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_dir", type=str, default="saved_model")
     
     parser.add_argument("--seed", type=int, default=3407)
-    parser.add_argument("--fold", type=int, default=0)
+    parser.add_argument("--fold", type=int, default=1)
     parser.add_argument("--dropout", type=float, default=0.3)
 
     parser.add_argument("--d_model", type=int, default=256)
