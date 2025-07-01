@@ -9,7 +9,7 @@ if __name__ == "__main__":
     parser.add_argument("--emb_type", type=str, default="qid")
     parser.add_argument("--save_dir", type=str, default="saved_model")
     parser.add_argument("--seed", type=int, default=3407)
-    parser.add_argument("--fold", type=int, default=0)
+    parser.add_argument("--fold", type=int, default=1)
     parser.add_argument("--dropout", type=float, default=0.05)
 
     parser.add_argument("--num_layers", type=int, default=2)
