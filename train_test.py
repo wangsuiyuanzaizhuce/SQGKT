@@ -35,7 +35,7 @@ params = {
     'prefetch_factor': 4,
     'agg_hops': 3,
     'emb_dim': 100,
-    'hard_recap': False,
+    'hard_recap': True,
     'dropout': (0.2, 0.4),
     'rank_k': 10,
     'k_fold': 5
