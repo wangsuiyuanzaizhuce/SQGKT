@@ -11,8 +11,7 @@ d = 0.7
 b = 10
 
 if __name__ == '__main__':
-    data = pd.read_csv(filepath_or_buffer='skill_builder_data_corrected_collapsed.csv', encoding="ISO-8859-1",
-                       dtype={17: str, 18: str})
+    data = pd.read_csv(filepath_or_buffer='data/skill_builder_data_corrected_collapsed.csv', encoding="ISO-8859-1")
     data = data.sort_values(by='user_id', ascending=True)
     data = data.drop(data[data['skill_id'] == ' '].index)
     data = data.dropna(subset=['skill_id'])
@@ -20,19 +19,20 @@ if __name__ == '__main__':
     is_valid_user = data.groupby('user_id').size() >= min_seq_len
     data = data[data['user_id'].isin(is_valid_user[is_valid_user].index)]
     data = data.loc[:, ['order_id', 'user_id', 'problem_id', 'correct', 'skill_id', 'skill_name',
-                        'ms_first_response', 'answer_type', 'attempt_count', 'hint_count']]
+                        'ms_first_response', 'answer_type', 'attempt_count','hint_count']]
     question_attempt_stats = data.groupby('problem_id')['attempt_count'].mean().reset_index()
     question_attempt_stats.rename(columns={'attempt_count': 'mean_attempt'}, inplace=True)
     data = pd.merge(data, question_attempt_stats, on='problem_id', suffixes=('', '_attempt'))
     data['attempt_factor'] = 1 - poisson(data['mean_attempt']).cdf(data['attempt_count'] - 1)
     data['attempt_factor_g'] = k + (1 - k) / (1 + np.exp(-d * (data['attempt_factor'] - b)))
 
+
     question_hint_stats = data.groupby('problem_id')['hint_count'].agg('mean').reset_index()
     question_hint_stats.rename(columns={'hint_count': 'mean_hint'}, inplace=True)
     data = pd.merge(data, question_hint_stats, on='problem_id')
 
     # data['hint_count'] = data['hint_count']
-    # CDF
+    #CDF
     data['hint_factor'] = 1 - poisson(data['mean_hint']).cdf(data['hint_count'] - 1)
     data['hint_factor_g'] = k + (1 - k) / (1 + np.exp(-d * (data['hint_factor'] - b)))
     data['ability_factor'] = data.groupby('user_id')['correct'].transform('mean')
@@ -83,7 +83,7 @@ if __name__ == '__main__':
         idx2skill = np.load('data/idx2skill.npy', allow_pickle=True).item()
         idx2user = np.load('data/idx2user.npy', allow_pickle=True).item()
 
-    # row[1]:user_id, row[2]:problem_id, row[4]:skill_id
+    #row[1]:user_id, row[2]:problem_id, row[4]:skill_id
     if not os.path.exists('data/qs_table.npz'):
         qs_table = np.zeros([num_q, num_s], dtype=float)
         q_set = data['problem_id'].drop_duplicates()
@@ -107,40 +107,53 @@ if __name__ == '__main__':
         qs_table = sparse.load_npz('data/qs_table.npz').toarray()
         qq_table = sparse.load_npz('data/qq_table.npz').toarray()
         ss_table = sparse.load_npz('data/ss_table.npz').toarray()
-
-    # 修正：统一使用 uq_table_3d 文件名和变量名
-    if not os.path.exists('data/uq_table_3d.npy'):
-        print("开始创建三维 uq_table...")
-        # 创建三维数组 [num_user, num_q, 3]
-        uq_table_3d = np.zeros([num_user, num_q, 3], dtype=float)
+    weights = np.array([0.4, 0.4, 0.2])
+    if not os.path.exists('data/uq_table.npz'):
+        uq_table = np.zeros([num_user, num_q], dtype=float)
         u_set = data['user_id'].drop_duplicates()
         u_samples = pd.concat([data[data['user_id'] == u_id].sample(1) for u_id in u_set])
-
-        processed_count = 0
         for row in u_samples.itertuples(index=False):
-            if processed_count % 500 == 0:
-                print(f"处理用户 {processed_count}/{len(u_samples)}")
-
-            try:
-                user_idx = user2idx[row[1]]
-                question_idx = question2idx[row[2]]
-
-                # 分别存储三个特征
-                uq_table_3d[user_idx, question_idx, 0] = row.attempt_factor_g
-                uq_table_3d[user_idx, question_idx, 1] = row.hint_factor_g
-                uq_table_3d[user_idx, question_idx, 2] = row.ability_factor
-                processed_count += 1
-            except Exception as e:
-                print(f"处理用户 {row[1]}, 问题 {row[2]} 时出错: {e}")
-                continue
-
-        # 保存为npy文件（三维数组不适合sparse格式）
-        np.save('data/uq_table_3d.npy', uq_table_3d)
-        print(f"三维 uq_table 创建完成，形状: {uq_table_3d.shape}")
+            user_index = user2idx[row[1]]
+            question_index = question2idx[row[2]]
+            factors = np.array([row.attempt_factor_g, row.hint_factor_g, row.ability_factor])
+            factor_value = np.sum(factors * weights)
+            uq_table[user2idx[row[1]], question2idx[(row[2])]] = factor_value
+        uq_table = sparse.coo_matrix(uq_table)
+        sparse.save_npz('data/uq_table.npz', uq_table)
     else:
-        # 修正：加载正确的文件
-        uq_table_3d = np.load('data/uq_table_3d.npy')
-        print(f"加载三维 uq_table，形状: {uq_table_3d.shape}")
+        uq_table = sparse.load_npz('data/uq_table.npz').toarray()
+
+    if not os.path.exists('data/uq_table.npy'):
+        # 1. 创建一个三维的 uq_table，第三个维度大小为3
+        uq_table = np.zeros([num_user, num_q + 1, 3], dtype=np.float32)
+
+        # 2. 优化数据处理逻辑，避免对整个数据集进行低效采样
+        #    直接遍历整个数据集，用最后一次出现的互动记录来填充 uq_table
+        #    这比原始的 u_samples 效率高得多，且逻辑更清晰
+        for row in data.itertuples(index=False):
+            user_id = row.user_id
+            problem_id = row.problem_id
+
+            # 获取索引
+            user_index = user2idx[user_id]
+            question_index = question2idx[problem_id]
+
+            # 3. 分别获取三个独立的特征值
+            ability_factor = row.ability_factor
+            attempt_factor_g = row.attempt_factor
+            hint_factor_g = row.hint_factor
+
+            # 4. 将三个特征值分别存入 uq_table 的第三个维度
+            #    注意顺序，这需要与模型中解析的顺序保持一致
+            #    模型中顺序是: c_i, g_p, g_n
+            #    对应到这里是: ability_factor, attempt_factor_g, hint_factor_g
+            uq_table[user_index, question_index, 0] = ability_factor
+            uq_table[user_index, question_index, 1] = attempt_factor_g
+            uq_table[user_index, question_index, 2] = hint_factor_g
+
+            np.save('data/uq_table.npy', uq_table)
+    else:
+        uq_table = np.load('data/uq_table.npy')
 
     if not os.path.exists('data/user_seq.npy'):
         user_seq = np.zeros([num_user, max_seq_len])
@@ -160,4 +173,3 @@ if __name__ == '__main__':
         np.save('data/user_res.npy', user_res)
         np.save('data/user_mask.npy', user_mask)
         np.save('data/user_user.npy', user_mask)
-        print("用户序列文件创建完成")

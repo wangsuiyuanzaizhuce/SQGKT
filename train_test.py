@@ -16,16 +16,16 @@ from utils import gen_sqgkt_graph, build_adj_list, build_adj_list_uq, gen_sqgkt_
 from sklearn.utils.class_weight import compute_sample_weight
 import torch.nn.functional as F
 os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
-time_now = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
-output_dir = 'output'
-os.makedirs(output_dir, exist_ok=True)
-output_path = os.path.join(output_dir, time_now + '.txt')
-output_file = open(output_path, 'w')
+time_now = datetime.now().strftime('%Y_%m_%d#%H_%M_%S')
+output_path = os.path.join("output", time_now)
+os.makedirs(output_path, exist_ok=True)  # 创建目录
+output_file_path = os.path.join(output_path, "log.txt")
+output_file = open(output_file_path, "w")
 # 训练时的超参数
 params = {
     'max_seq_len': max_seq_len,
     'min_seq_len': min_seq_len,
-    'epochs': 4,
+    'epochs': 2,
     'lr': 0.01,
     'lr_gamma': 0.85,
     'batch_size': 128,
@@ -49,13 +49,12 @@ print(params)
 batch_size = params['batch_size']
 
 qs_table = torch.tensor(sparse.load_npz('data/qs_table.npz').toarray(), dtype=torch.int64, device=DEVICE)
-uq_table_3d = torch.tensor(np.load('data/uq_table_3d.npy'), dtype=torch.float32, device=DEVICE)
-print(f"uq_table 形状: {uq_table_3d.shape}")
+uq_table = torch.tensor(np.load('data/uq_table.npy'), dtype=torch.float32, device=DEVICE)
 
 num_question = torch.tensor(qs_table.shape[0], device=DEVICE)
 num_skill = torch.tensor(qs_table.shape[1], device=DEVICE)
 
-num_user = torch.tensor(uq_table_3d.shape[0], device=DEVICE)
+num_user = torch.tensor(uq_table.shape[0], device=DEVICE)
 
 q_neighbors_list, s_neighbors_list = build_adj_list()
 q_neighbors, s_neighbors = gen_sqgkt_graph(q_neighbors_list, s_neighbors_list, params['size_q_neighbors'], params['size_s_neighbors'])
@@ -69,7 +68,7 @@ q_neighbors_2 = torch.tensor(q_neighbors_2, dtype=torch.int64, device=DEVICE)
 
 # 初始化模型
 model = sqgkt(
-    num_question, num_skill, q_neighbors, s_neighbors, qs_table, num_user, u_neighbors, q_neighbors_2, uq_table_3d,
+    num_question, num_skill, q_neighbors, s_neighbors, qs_table, num_user, u_neighbors, q_neighbors_2, uq_table,
     agg_hops=params['agg_hops'],
     emb_dim=params['emb_dim'],
     dropout=params['dropout'],
