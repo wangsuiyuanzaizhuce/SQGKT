@@ -195,7 +195,7 @@ class sqgkt(Module):
                 else:
                     emb_node_neighbor_2.append(self.emb_table_question_2(nodes))
             # 汇聚信息到第0跳
-            emb0_question_t_2 = self.aggregate_uq(emb_node_neighbor_2)
+            emb0_question_t_2 = self.aggregate_uq(emb_node_neighbor_2 , node_neighbors_2)
             # 创建一个全0的（B，D）来存放最终结果
             emb_question_t_2 = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
             # 这里将费尽心思搞出来的emb0_question_t_2，上面只是假设形状是（2，100），2是有效的数量，实际上可能是上百个。匹配进emb_question_t_2[mask_t]去，上面的例子来看，形状可能是：
@@ -360,47 +360,71 @@ class sqgkt(Module):
         return torch.tanh(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
 
     # 总指挥，简单来说，这里依旧是将所有的信息汇聚在第0跳
-    def aggregate_uq(self, emb_node_neighbor):
+    def aggregate_uq(self, emb_node_neighbor , node_neighbors_2):
         for i in range(self.agg_hops):
             for j in range(self.agg_hops - i):
-                emb_node_neighbor[j] = self.sum_aggregate_uq(emb_node_neighbor[j], emb_node_neighbor[j + 1], j)
+                if j % 2 == 0:
+                    emb_node_neighbor[j] = self.sum_aggregate(emb_node_neighbor[j], emb_node_neighbor[j + 1], j)
+                else:
+                    emb_node_neighbor[j] = self.sum_aggregate_uq(emb_node_neighbor[j], emb_node_neighbor[j + 1], node_neighbors_2[j], node_neighbors_2[j + 1], j)
         return torch.tanh(self.MLP_AGG_last(emb_node_neighbor[0]))
 
+
+
     # 核心计算部分
-    def sum_aggregate_uq(self, emb_self, emb_neighbor, hop):
-        # 获得第一个维度（用户数目）
-        num_nodes = emb_self.size(0)
-        # 这里是每个节点的嵌入向量（可能很深，但也只取第一个维度的数目）
-        embedding_dim = emb_self.size(1)
-        # 创建一个空白张量，储存从邻居那里汇聚的信息
-        weighted_emb_neighbor_sum = torch.zeros_like(emb_self)
-        # todo这里的实现可以优化
-        # 逐个节点进行处理。
-        # 注意：这里的实现没有完全向量化，虽然易于理解，但可能比优化的GNN库层要慢。
-        # todo索引问题
-        for i in range(num_nodes):
-            # emb_neighbor是下一跳的东西，这里取i就是第i个用户
-            neighbor_embs = emb_neighbor[i]  # [neighbor_size, embedding_dim]
-            # 从 uq_table 中查找节点 i（第几个用户） 与其邻居之间关系的“元数据”权重
-            node_weights = self.uq_table[i, :neighbor_embs.size(0), :]  # [neighbor_size, 3]
 
 
-            c_i = node_weights[:, 0].unsqueeze(-1)  # [neighbor_size, 1]
-            g_p = node_weights[:, 1].unsqueeze(-1)  # [neighbor_size, 1]
-            g_n = node_weights[:, 2].unsqueeze(-1)  # [neighbor_size, 1]
+    # 核心计算部分
+    def sum_aggregate_uq(self, emb_self, emb_neighbor, self_nodes_ids, neighbor_nodes_ids, hop):
+        """
+        ... (docstring 不变) ...
+        """
+        # 为了清晰起见，重命名输入
+        if hop % 2 == 0:  # 聚合方向: User -> Question
+            user_ids_for_lookup = self_nodes_ids
+            question_ids_for_lookup = neighbor_nodes_ids
+        else:  # 聚合方向: Question -> User
+            user_ids_for_lookup = neighbor_nodes_ids
+            question_ids_for_lookup = self_nodes_ids
 
-           
-            # g_ij = c_i + g_ij^p + g_ij^n
-            fusion_weights = self.w_c * c_i + self.w_p * g_p + self.w_n * g_n  # [neighbor_size, 1]
+        # --- 【核心修复区域】 ---
+        # 目标：让两个ID张量的形状完全一样，都是 (B, M, N)
 
-   
-            expanded_fusion_weights = fusion_weights.expand_as(neighbor_embs)
-            weighted_neighbor_embs = neighbor_embs * expanded_fusion_weights
+        # 无论聚合方向如何，我们都需要将维度较少的那个张量扩展到和维度较多的张量一样的形状。
+        # 始终将 user_ids_for_lookup 和 question_ids_for_lookup 扩展到 neighbor_nodes_ids 的形状
+        # 因为 neighbor_nodes_ids 总是比 self_nodes_ids 多一个维度。
 
-        
-            weighted_emb_neighbor_sum[i] = torch.mean(weighted_neighbor_embs, dim=0)
+        # 扩展 'user' ID 张量
+        if user_ids_for_lookup.dim() < neighbor_nodes_ids.dim():
+            expanded_user_ids = user_ids_for_lookup.unsqueeze(-1).expand_as(neighbor_nodes_ids)
+        else:
+            expanded_user_ids = user_ids_for_lookup
 
-    
+        # 扩展 'question' ID 张量
+        if question_ids_for_lookup.dim() < neighbor_nodes_ids.dim():
+            expanded_question_ids = question_ids_for_lookup.unsqueeze(-1).expand_as(neighbor_nodes_ids)
+        else:
+            expanded_question_ids = question_ids_for_lookup
+
+        # --- 【修复结束】 ---
+
+        # 2. 从 uq_table 中批量获取权重
+        # uq_table 的维度是 (num_users, num_questions, 3)
+        # 现在两个索引张量的形状都是 (B, M, N)，可以安全索引
+        node_weights = self.uq_table[expanded_user_ids, expanded_question_ids]  # 输出形状: (B, M, N, 3)
+
+        # ... (方法的其余部分保持不变) ...
+        c_i = node_weights[..., 0].unsqueeze(-1)
+        g_p = node_weights[..., 1].unsqueeze(-1)
+        g_n = node_weights[..., 2].unsqueeze(-1)
+
+        fusion_weights = self.w_c * c_i + self.w_p * g_p + self.w_n * g_n
+        print(fusion_weights.shape)
+
+        weighted_neighbor_embs = emb_neighbor * fusion_weights
+
+        weighted_emb_neighbor_sum = torch.mean(weighted_neighbor_embs, dim=-2)
+
         emb_sum = emb_self + weighted_emb_neighbor_sum
         return torch.tanh(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
 
