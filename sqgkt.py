@@ -357,8 +357,8 @@ class sqgkt(Module):
         for i in range(self.agg_hops):
             for j in range(self.agg_hops - i):
                 emb_node_neighbor[j] = self.sum_aggregate(emb_node_neighbor[j], emb_node_neighbor[j + 1], j)
-        # self.MLP_AGG_last经过线性层计算后的新张量，形状通常保持不变，仍为 (_batch_size, 100)；tanh 函数 (双曲正切函数) 会将输入张量中的每一个元素值都映射到 (-1, 1) 的区间内。
-        return torch.tanh(self.MLP_AGG_last(emb_node_neighbor[0]))
+        # self.MLP_AGG_last经过线性层计算后的新张量，形状通常保持不变，仍为 (_batch_size, 100)；relu 函数 (双曲正切函数) 会将输入张量中的每一个元素值都映射到 (-1, 1) 的区间内。
+        return torch.relu(self.MLP_AGG_last(emb_node_neighbor[0]))
 
     # 邻居跳之间融合用的
     def sum_aggregate(self, emb_self, emb_neighbor, hop):
@@ -368,7 +368,7 @@ class sqgkt(Module):
         emb_sum = (emb_sum_neighbor + emb_self)
         # self.mlps4agg[hop](emb_sum))：将融合后的 emb_sum 通过这个线性层，进行一次仿射变换（W*X + b），这是GCN层中的权重矩阵部分，输出形状不变，仍为 (_batch_size, 3, 100)
         # dropout_gnn正则化；
-        return torch.tanh(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
+        return torch.relu(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
 
     # 总指挥，简单来说，这里依旧是将所有的信息汇聚在第0跳
     def aggregate_uq(self, emb_node_neighbor , node_neighbors_2):
@@ -378,7 +378,7 @@ class sqgkt(Module):
                     emb_node_neighbor[j] = self.sum_aggregate(emb_node_neighbor[j], emb_node_neighbor[j + 1], j)
                 else:
                     emb_node_neighbor[j] = self.sum_aggregate_uq(emb_node_neighbor[j], emb_node_neighbor[j + 1], node_neighbors_2[j], node_neighbors_2[j + 1], j)
-        return torch.tanh(self.MLP_AGG_last(emb_node_neighbor[0]))
+        return torch.relu(self.MLP_AGG_last(emb_node_neighbor[0]))
 
 
 
@@ -436,7 +436,7 @@ class sqgkt(Module):
         weighted_emb_neighbor_sum = torch.mean(weighted_neighbor_embs, dim=-2)
 
         emb_sum = emb_self + weighted_emb_neighbor_sum
-        return torch.tanh(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
+        return torch.relu(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
 
     def recap_hard(self, q_next, q_history):
         # 批次数目
