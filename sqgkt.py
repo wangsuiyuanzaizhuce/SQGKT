@@ -58,7 +58,7 @@ class sqgkt(Module):
         self.w_n = nn.Parameter(torch.tensor(0.33, requires_grad=True))
 
         # LSTM单元的定义，输入是融合后问题的嵌入和作答结果的嵌入拼接起来的，所以这里维度是emb_dim * 2 ，隐藏状态是学生的知识状态和嵌入维度相同
-        self.lstm_cell = LSTMCell(input_size=emb_dim * 2, hidden_size=emb_dim)
+        self.lstm_cell = LSTMCell(input_size=emb_dim, hidden_size=emb_dim)
         # 为GCN的每一个聚合都定义了一个MLP。这是GCN中的权重矩阵 (W)，用于对聚合后的信息进行线性变换。
         # 这里for _ in range(agg_hops)代表，我们不关心序号，只关心执行agg_hops次这件事，
         # 要用ModuleList，因为如果用普通的 Python 列表，PyTorch无法看到这些 Linear 层，这样才可以看到Linear层的偏置和权重，在优化器的时候会更新他们的参数，也能被移动到GPU
@@ -72,7 +72,7 @@ class sqgkt(Module):
         self.MLP_query = Linear(emb_dim, emb_dim)
         self.MLP_key = Linear(emb_dim, emb_dim)
         self.MLP_W = Linear(2 * emb_dim, 1)
-
+        self.fusion_layer = Linear(emb_dim * 2, emb_dim)
         # todo
         # 这两个参数没有被使用，需要进一步查看是什么（和注意力相关）
         # self.attention_weights = torch.nn.Parameter(torch.randn(3, requires_grad=True))
@@ -88,8 +88,8 @@ class sqgkt(Module):
 
         # todo
         # LSTM的初始隐藏状态，但是从未被使用
-        # h1_pre = torch.nn.init.xavier_uniform_(torch.zeros(self.emb_dim, device=DEVICE).repeat(batch_size, 1))
-        # h2_pre = torch.nn.init.xavier_uniform_(torch.zeros(self.emb_dim, device=DEVICE).repeat(batch_size, 1))
+        h = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
+        c = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
 
         # 创建了一个全0的张量，用来存储每一个时间步t后，LSTM的隐藏状态h_t，这里的sqe_len应该是时间序列（每个步长的历史状态都储存在这里，用一个emb_dim大小的向量表示）
         state_history = torch.zeros(batch_size, seq_len, self.emb_dim, device=DEVICE)
@@ -216,10 +216,21 @@ class sqgkt(Module):
             # cat是拼接，dim是左右拼接
             # [[ q1, q2, q3, q4,  r1, r2, r3, r4 ],   学生0的完整事件向量
             #  [ q5, q6, q7, q8,  r5, r6, r7, r8 ]]   学生1的完整事件向量
-            lstm_input = torch.cat((emb_hat_q, emb_response_t), dim=1)
-            # todo这里lstmcell只管一步，需要手动传递很多东西，所以不能直接用更简单的LSTM，无法直接解决
-            # 将当前事件 lstm_input 和上一时刻的隐藏状态（lstm_cell内部自动维护）结合，计算出当前时刻的新隐藏状态
-            lstm_output = self.dropout_lstm(self.lstm_cell(lstm_input)[0])  
+            interaction_emb = torch.cat((emb_hat_q, emb_response_t), dim=1)
+            e_t = F.relu(self.fusion_layer(interaction_emb))
+            h_prev_masked, c_prev_masked = h[mask_t], c[mask_t]
+            e_t_masked = e_t[mask_t]
+
+            h_next_masked, c_next_masked = self.lstm_cell(e_t_masked, (h_prev_masked, c_prev_masked))
+
+            h_new, c_new = h.clone(), c.clone()
+            h_new[mask_t] = self.dropout_lstm(h_next_masked)
+            c_new[mask_t] = c_next_masked
+
+            h, c = h_new, c_new
+
+            lstm_output = h
+            state_history[:, t] = lstm_output
 
             # 准备下一次预测的问题
             # 核心任务是构建一个张量，该张量完整地描述了下一个挑战是什么。这个挑战由两部分构成：下一个问题 q_next 和 它所关联的所有技能。这个最终的张量将作为预测模块的查询（Query）
@@ -419,7 +430,6 @@ class sqgkt(Module):
         g_n = node_weights[..., 2].unsqueeze(-1)
 
         fusion_weights = self.w_c * c_i + self.w_p * g_p + self.w_n * g_n
-        print(fusion_weights.shape)
 
         weighted_neighbor_embs = emb_neighbor * fusion_weights
 
