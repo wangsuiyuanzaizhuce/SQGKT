@@ -419,7 +419,6 @@ class sqgkt(Module):
         g_n = node_weights[..., 2].unsqueeze(-1)
 
         fusion_weights = self.w_c * c_i + self.w_p * g_p + self.w_n * g_n
-        print(fusion_weights.shape)
 
         weighted_neighbor_embs = emb_neighbor * fusion_weights
 
