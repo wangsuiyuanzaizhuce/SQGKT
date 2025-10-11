@@ -78,7 +78,7 @@ model = sqgkt(
 
 
 
-loss_fun = torch.nn.BCEWithLogitsLoss().to(DEVICE) # 损失函数
+loss_fun = torch.nn.BCELoss().to(DEVICE) # 损失函数
 
 
 dataset = UserDataset()
@@ -145,8 +145,7 @@ for epoch in range(params['epochs']):
 
             auc = roc_auc_score(y_target.cpu(), y_pred.cpu())
             train_auc += auc * len(x) / train_data_len
-            # loss.backward()
-            loss.backward(retain_graph=True)
+            loss.backward()
             optimizer.step()
             train_step += 1
             print(f'step: {train_step}, loss: {loss.item():.4f}, acc: {acc.item():.4f}, auc: {auc:.4f}')
@@ -225,6 +224,6 @@ for epoch in range(params['epochs']):
     y_label_aver[0][epoch], y_label_aver[1][epoch], y_label_aver[2][epoch] = test_loss_aver, test_acc_aver, test_auc_aver
 
 output_file.close()
-torch.save(model, f=f'model/{time_now}.pt')
+torch.save(model.state_dict(), f=f'model/{time_now}.pt')
 np.savetxt(f'chart_data/{time_now}_all.txt', y_label_all)
 np.savetxt(f'chart_data/{time_now}_aver.txt', y_label_aver)
