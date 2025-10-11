@@ -86,8 +86,6 @@ class sqgkt(Module):
         q_neighbor_size, s_neighbor_size = self.q_neighbors.shape[1], self.s_neighbors.shape[1]
         u_neighbor_size, q_neighbor_size_2 = self.u_neighbors.shape[1], self.q_neighbors_2.shape[1]
 
-        # todo
-        # LSTM的初始隐藏状态，但是从未被使用
         h = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
         c = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
 
@@ -208,7 +206,6 @@ class sqgkt(Module):
             # self.emb_table_question_2(...): 这会获取这些padding问题的原始嵌入（即没有经过图聚合的、在嵌入表里最原始的向量）
             emb_question_t_2[~mask_t] = self.emb_table_question_2(question_t[~mask_t])
 
-            # todo 确认是否可以更新
             # 融合两种图嵌入（这里权重理论上可以更新）
             emb_hat_q = self.w1_q * emb_question_t + self.w2_q * emb_question_t_2 
 
@@ -217,7 +214,10 @@ class sqgkt(Module):
             # [[ q1, q2, q3, q4,  r1, r2, r3, r4 ],   学生0的完整事件向量
             #  [ q5, q6, q7, q8,  r5, r6, r7, r8 ]]   学生1的完整事件向量
             interaction_emb = torch.cat((emb_hat_q, emb_response_t), dim=1)
+            # 经过线性层
             e_t = F.relu(self.fusion_layer(interaction_emb))
+
+            # todo LSTM增加修改的地方
             h_prev_masked, c_prev_masked = h[mask_t], c[mask_t]
             e_t_masked = e_t[mask_t]
 
