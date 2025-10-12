@@ -537,5 +537,4 @@ class sqgkt(Module):
         # 第一层sum是对M（问题-技能维度上求和），第二个sum是对N（知识状态的维度上求和）
         p = torch.sum(torch.sum(alpha * output_g, dim=1), dim=1)
         # 输出最终的概率：Sigmoid 函数可以将任意的实数分数 p 压缩到 (0, 1)
-        result = torch.sigmoid(torch.squeeze(p, dim=-1))
-        return result
+        return p
