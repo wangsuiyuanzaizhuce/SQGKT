@@ -235,28 +235,33 @@ class sqgkt(Module):
             # 准备下一次预测的问题
             # 核心任务是构建一个张量，该张量完整地描述了下一个挑战是什么。这个挑战由两部分构成：下一个问题 q_next 和 它所关联的所有技能。这个最终的张量将作为预测模块的查询（Query）
             # 获取下一个时间步，所有学生分别要面对的问题ID
+            # todo 这里为了加快效率，替换了逻辑
             q_next = question[:, t + 1]
+            skills_related_list = [self.emb_table_skill(torch.nonzero(s, as_tuple=True)[0]) for s in
+                                   self.qs_table[q_next]]
+            max_num_skill = max(s.shape[0] for s in skills_related_list) if skills_related_list else 0
+
             # 预先构建一个问题-技能的关系表，每一个问题应该对应的都是一个one-hot编码的技能表格
-            skills_related = self.qs_table[q_next]
+            #skills_related = self.qs_table[q_next]
             # 处理变长技能列表 (核心难点)，但是我都用one-hot编码了，那不是都是一个张量表格吗，只是说里面的1的数量不同而已，这是没问题的，但是独热编码只是初始形状，我们还需要提取出来，到底是哪些技能，经过转换之后就不一样了（1，2，6），（2，5）这样
-            skills_related_list = []
-            max_num_skill = 1
-            for i in range(batch_size):
+            #skills_related_list = []
+            #max_num_skill = 1
+            #for i in range(batch_size):
                 # 返回张量中所有非0元素的索引，torch.nonzero(skills_related[0]) 返回 tensor([[1], [5]])；squeeze() 之后，skills_index 变为 tensor([1, 5])。它的长度是 2
-                skills_index = torch.nonzero(skills_related[i]).squeeze()
+                #skills_index = torch.nonzero(skills_related[i]).squeeze()
                 # 经过上面的处理，现在每一个元素都是一个一维张量，并且长度不一样（可能）
                 # 这个是用来处理问题只关联单个技能这个特殊情况的，skills_related[i] 是 [0, 1, 0, 0, 0, 0, 0, 0]。
                 # torch.nonzero(...) 返回一个形状为 (1, 1) 的张量：tensor([[1]])。
                 # .squeeze() 之后，skills_index 会把所有大小为1的维度都移除，结果变成一个零维张量 (Scalar)：tensor(1)
                 # 简单来说，这里就是一个数字/值，根本没有中括号包裹，因为squeeze的问题，导致一层包裹都没有了
-                if len(skills_index.shape) == 0:
+                #if len(skills_index.shape) == 0:
                     # 会输出一个嵌入张量（比如100维），unsqueeze会在指定的维度上增加一个大小为1的维度， dim=0代表在最前面增加一个维度，这里形状就变成了（1，100）
-                    skills_related_list.append(torch.unsqueeze(self.emb_table_skill(skills_index), dim=0))
-                else:
+                    #skills_related_list.append(torch.unsqueeze(self.emb_table_skill(skills_index), dim=0))
+                #else:
                     # 这里添加的是（N，100）张量
-                    skills_related_list.append(self.emb_table_skill(skills_index))
-                    if skills_index.shape[0] > max_num_skill:
-                        max_num_skill = skills_index.shape[0]
+                    #skills_related_list.append(self.emb_table_skill(skills_index))
+                    #if skills_index.shape[0] > max_num_skill:
+                        #max_num_skill = skills_index.shape[0]
 
             # 上面总结下来，是获得了每个学生即将要回答对应的技能，行是学生，列是一个二维张量，第一个维度是问题关联的技能数量，第二个维度是技能的嵌入向量
             # 用来获取每个学生下一个问题的嵌入向量（技能关联图的输出）
@@ -318,6 +323,8 @@ class sqgkt(Module):
             else:
                 # 原本lstm_output形状是（batch_size,emb_dim），变成了（batch_size,1,emb_dim）
                 current_state = lstm_output.unsqueeze(dim=1)
+                # todo 下面一行是新加的（为了加速改的）
+                history_slice = state_history[:, :t].clone()
                 # 历史记录太短了，比要筛选的数量还短
                 if t <= self.rank_k:
                     # 直接拼接起来（batch_size,1,emb_dim）和(batch_size, max_seq_len, emb_dim)，这里的拼接就是除了要拼接的维度之外，其它维度都保持一致
@@ -341,8 +348,9 @@ class sqgkt(Module):
                     # 获取第i个学生的最相关历史时刻索引，一个包含了k个索引的一维张量，例如 tensor([2, 5, 4])
                     # 之后用这个最相关的历史索引去这个学生的历史状态中直接抽取出来当时的状态，比如抽出第2，5，4行，并按照或者顺序合成一个新的张量
                     # 最后的形状是(B，k, emb_dim)，其中 k 是 self.rank_k
-                    select_history = torch.cat(tuple(state_history[i][indices[i]].unsqueeze(dim=0)
-                                                     for i in range(batch_size)), dim=0)
+                    # todo这里为了加快速度，优化了
+                    select_history = history_slice.gather(1, indices.unsqueeze(-1).expand(-1, -1, self.emb_dim))
+                    #select_history = torch.cat(tuple(state_history[i][indices[i]].unsqueeze(dim=0) for i in range(batch_size)), dim=0)
                     # 合并操作，当前状态加上历史状态，沿着第1个维度，最后也就是（B，K+1，emb_dim）
                     current_history_state = torch.cat((current_state, select_history), dim=1)
             # 开始预测，并且储存结果
