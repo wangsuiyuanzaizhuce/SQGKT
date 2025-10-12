@@ -370,13 +370,16 @@ class sqgkt(Module):
 
     # 邻居跳之间融合用的
     def sum_aggregate(self, emb_self, emb_neighbor, hop):
+        # 先变换：对每个邻居的嵌入独立应用线性变换(W * X + b)
+        # self.mlps4agg[hop] 会作用于 emb_neighbor 的最后一个维度 (emb_dim)。
+        transformed_neighbors = self.mlps4agg[hop](emb_neighbor)
         # 比如现在是(_batch_size, 3, 4, 100)；torch.mean 会沿着倒数第二个维度计算平均值。这意味着，对于每个一跳邻居，它会把它所有（4个）二跳邻居的嵌入向量取平均，融合成一个单一的嵌入向量
-        emb_sum_neighbor = torch.mean(emb_neighbor, dim=-2)
+        emb_sum_neighbor = torch.mean(transformed_neighbors, dim=-2)
         # 直接逐元素相加。融合后的结果，形状不变，仍为 (_batch_size, 3, 100)
         emb_sum = (emb_sum_neighbor + emb_self)
         # self.mlps4agg[hop](emb_sum))：将融合后的 emb_sum 通过这个线性层，进行一次仿射变换（W*X + b），这是GCN层中的权重矩阵部分，输出形状不变，仍为 (_batch_size, 3, 100)
         # dropout_gnn正则化；
-        return torch.relu(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
+        return torch.relu(self.dropout_gnn(self.emb_sum))
 
     # 总指挥，简单来说，这里依旧是将所有的信息汇聚在第0跳
     def aggregate_uq(self, emb_node_neighbor , node_neighbors_2):
@@ -440,11 +443,13 @@ class sqgkt(Module):
         fusion_weights = self.w_c * c_i + self.w_p * g_p + self.w_n * g_n
 
         weighted_neighbor_embs = emb_neighbor * fusion_weights
+        # 先变换：对每个加权后的邻居嵌入应用线性变换。
+        transformed_weighted_neighbors = self.mlps4agg[hop](weighted_neighbor_embs)
 
-        weighted_emb_neighbor_sum = torch.mean(weighted_neighbor_embs, dim=-2)
+        weighted_emb_neighbor_sum = torch.mean(transformed_weighted_neighbors, dim=-2)
 
         emb_sum = emb_self + weighted_emb_neighbor_sum
-        return torch.relu(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
+        return torch.relu(self.dropout_gnn(emb_sum))
 
     def recap_hard(self, q_next, q_history):
         # 批次数目
