@@ -28,7 +28,7 @@ output_file = open(output_file_path, "w")
 params = {
     'max_seq_len': max_seq_len,
     'min_seq_len': min_seq_len,
-    'epochs': 40,
+    'epochs': 250,
     'lr': 0.01,
     'lr_gamma': 0.85,
     'batch_size': 128,
@@ -43,7 +43,6 @@ params = {
     'hard_recap': False,
     'dropout': (0.2, 0.4),
     'rank_k': 10,
-    'k_fold': 5
 }
 output_file.write(str(params) + '\n')
 print(params)
@@ -101,36 +100,82 @@ else:
 dataset = UserDataset()
 print('model has been built')
 
-# --- 6. 训练与评估循环 ---
-k_fold = KFold(n_splits=params['k_fold'], shuffle=True, random_state=42)
+train_data_len = int(len(dataset) * 0.8)
+test_data_len = len(dataset) - train_data_len
+indices = np.arange(len(dataset))
+np.random.shuffle(indices)
+train_indices = indices[:train_data_len]
+test_indices = indices[train_data_len:]
+train_dataset = Subset(dataset, train_indices)
+test_dataset = Subset(dataset, test_indices)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=params['batch_size'],
+    shuffle=True,
+    num_workers=params["num_workers"],
+    drop_last=True,
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=params['batch_size'],
+    shuffle=False,
+    num_workers=params["num_workers"],
+    drop_last=True,
+)
 
 # epoch_total_counter 已被移除，我们用 epoch 和 fold 直接显示
 for epoch in range(start_epoch, params['epochs']):
-    train_loss_aver, train_acc_aver, train_auc_aver = 0.0, 0.0, 0.0
+    # 这些变量将在后面计算平均值
+    train_loss, train_acc_aver, train_auc_aver = 0.0, 0.0, 0.0
     test_loss_aver, test_acc_aver, test_auc_aver = 0.0, 0.0, 0.0
 
-    # 内层 K-Fold 循环
-    for fold, (train_indices, test_indices) in enumerate(k_fold.split(dataset)):
-        time0 = time.time()
-        # epoch_total_counter += 1
-        print(
-            '===================' + LOG_Y + f' Epoch: {epoch + 1}/{params["epochs"]}, Fold: {fold + 1}/{params["k_fold"]} ' + LOG_END + '=====================')
+    time0 = time.time()
 
-        train_set = Subset(dataset, train_indices)
-        test_set = Subset(dataset, test_indices)
-        train_data_len, test_data_len = len(train_set), len(test_set)
+    # --- Training Phase ---
+    model.train()
+    train_step, train_loss_total, train_right, train_total, train_auc_total = 0, 0.0, 0.0, 0.0, 0.0
+    print('-------------------training------------------')
+    for data in train_loader:
+        optimizer.zero_grad()
+        u, x, y_target, mask = (d.to(DEVICE) for d in
+                                [data[:, :, 0], data[:, :, 1], data[:, :, 2], data[:, :, 3].to(torch.bool)])
 
-        train_loader = DataLoader(train_set, batch_size=params['batch_size'], num_workers=params['num_workers'],
-                                  pin_memory=True, shuffle=True)
-        test_loader = DataLoader(test_set, batch_size=params['batch_size'], num_workers=params['num_workers'],
-                                 pin_memory=True)
+        y_hat = model(u, x, y_target, mask)
+        y_hat_masked = torch.masked_select(y_hat, mask)
+        y_target_masked = torch.masked_select(y_target, mask)
 
-        # --- Training Phase ---
-        model.train()
-        train_step, train_loss_total, train_right, train_total, train_auc_total = 0, 0.0, 0.0, 0.0, 0.0
-        print('-------------------training------------------')
-        for data in train_loader:
-            optimizer.zero_grad()
+        loss = loss_fun(y_hat_masked, y_target_masked.to(torch.float32))
+        loss.backward()
+        optimizer.step()
+
+        y_pred_masked = (y_hat_masked >= 0.0).int()
+
+        # --- 实时计算与打印 ---
+        train_step += 1
+        batch_loss = loss.item()
+        num_valid = torch.sum(mask).item()
+        batch_acc = torch.sum(y_pred_masked == y_target_masked).item() / num_valid
+        try:
+            batch_auc = roc_auc_score(y_target_masked.cpu().numpy(), y_hat_masked.detach().cpu().numpy())
+        except ValueError:
+            batch_auc = 0.5
+
+        print(f'step: {train_step}, loss: {batch_loss:.4f}, acc: {batch_acc:.4f}, auc: {batch_auc:.4f}')
+
+        # --- 累加用于 fold 平均 ---
+        train_loss_total += batch_loss
+        train_right += torch.sum(y_pred_masked == y_target_masked).item()
+        train_total += num_valid
+        train_auc_total += batch_auc * num_valid
+
+    # --- Testing Phase ---
+    model.eval()
+    test_step, test_loss_total, test_right, test_total, test_auc_total = 0, 0.0, 0.0, 0.0, 0.0
+    print('-------------------testing------------------')
+    with torch.no_grad():
+        for data in test_loader:
             u, x, y_target, mask = (d.to(DEVICE) for d in
                                     [data[:, :, 0], data[:, :, 1], data[:, :, 2], data[:, :, 3].to(torch.bool)])
 
@@ -139,13 +184,11 @@ for epoch in range(start_epoch, params['epochs']):
             y_target_masked = torch.masked_select(y_target, mask)
 
             loss = loss_fun(y_hat_masked, y_target_masked.to(torch.float32))
-            loss.backward()
-            optimizer.step()
 
             y_pred_masked = (y_hat_masked >= 0.0).int()
 
             # --- 实时计算与打印 ---
-            train_step += 1
+            test_step += 1
             batch_loss = loss.item()
             num_valid = torch.sum(mask).item()
             batch_acc = torch.sum(y_pred_masked == y_target_masked).item() / num_valid
@@ -154,93 +197,33 @@ for epoch in range(start_epoch, params['epochs']):
             except ValueError:
                 batch_auc = 0.5
 
-            print(f'step: {train_step}, loss: {batch_loss:.4f}, acc: {batch_acc:.4f}, auc: {batch_auc:.4f}')
+            print(f'step: {test_step}, loss: {batch_loss:.4f}, acc: {batch_acc:.4f}, auc: {batch_auc:.4f}')
 
             # --- 累加用于 fold 平均 ---
-            train_loss_total += batch_loss
-            train_right += torch.sum(y_pred_masked == y_target_masked).item()
-            train_total += num_valid
-            train_auc_total += batch_auc * num_valid
+            test_loss_total += batch_loss
+            test_right += torch.sum(y_pred_masked == y_target_masked).item()
+            test_total += num_valid
+            test_auc_total += batch_auc * num_valid
 
-        fold_train_loss = train_loss_total / train_step
-        fold_train_acc = train_right / train_total
-        fold_train_auc = train_auc_total / train_total
-        train_loss_aver += fold_train_loss
-        train_acc_aver += fold_train_acc
-        train_auc_aver += fold_train_auc
+    run_time = time.time() - time0
+    print(LOG_B + f'Time: {run_time:.2f}s' + LOG_END)
+    # 实时刷新缓冲区，确保日志不丢失
+    output_file.flush()
 
-        # --- Testing Phase ---
-        model.eval()
-        test_step, test_loss_total, test_right, test_total, test_auc_total = 0, 0.0, 0.0, 0.0, 0.0
-        print('-------------------testing------------------')
-        with torch.no_grad():
-            for data in test_loader:
-                u, x, y_target, mask = (d.to(DEVICE) for d in
-                                        [data[:, :, 0], data[:, :, 1], data[:, :, 2], data[:, :, 3].to(torch.bool)])
-
-                y_hat = model(u, x, y_target, mask)
-                y_hat_masked = torch.masked_select(y_hat, mask)
-                y_target_masked = torch.masked_select(y_target, mask)
-
-                loss = loss_fun(y_hat_masked, y_target_masked.to(torch.float32))
-
-                y_pred_masked = (y_hat_masked >= 0.0).int()
-
-                # --- 实时计算与打印 ---
-                test_step += 1
-                batch_loss = loss.item()
-                num_valid = torch.sum(mask).item()
-                batch_acc = torch.sum(y_pred_masked == y_target_masked).item() / num_valid
-                try:
-                    batch_auc = roc_auc_score(y_target_masked.cpu().numpy(), y_hat_masked.detach().cpu().numpy())
-                except ValueError:
-                    batch_auc = 0.5
-
-                print(f'step: {test_step}, loss: {batch_loss:.4f}, acc: {batch_acc:.4f}, auc: {batch_auc:.4f}')
-
-                # --- 累加用于 fold 平均 ---
-                test_loss_total += batch_loss
-                test_right += torch.sum(y_pred_masked == y_target_masked).item()
-                test_total += num_valid
-                test_auc_total += batch_auc * num_valid
-
-        fold_test_loss = test_loss_total / test_step
-        fold_test_acc = test_right / test_total
-        fold_test_auc = test_auc_total / test_total
-
-        test_loss_aver += fold_test_loss
-        test_acc_aver += fold_test_acc
-        test_auc_aver += fold_test_auc
-
-        run_time = time.time() - time0
-        print(
-            LOG_B + f'Fold Training:   loss: {fold_train_loss:.4f}, acc: {fold_train_acc:.4f}, auc: {fold_train_auc:.4f}' + LOG_END)
-        print(
-            LOG_B + f'Fold Testing:    loss: {fold_test_loss:.4f}, acc: {fold_test_acc:.4f}, auc: {fold_test_auc:.4f}' + LOG_END)
-        print(LOG_B + f'Time: {run_time:.2f}s' + LOG_END)
-
-        # 写入日志文件
-        output_file.write(
-            f'epoch {epoch + 1}, fold {fold + 1} | train_loss: {fold_train_loss:.4f}, train_acc: {fold_train_acc:.4f}, train_auc: {fold_train_auc:.4f} | test_loss: {fold_test_loss:.4f}, test_acc: {fold_test_acc:.4f}, test_auc: {fold_test_auc:.4f}\n')
-        # 实时刷新缓冲区，确保日志不丢失
-        output_file.flush()
-
-    # --- K-Fold 循环结束，计算平均值并保存 ---
-    train_loss_aver /= params['k_fold']
-    train_acc_aver /= params['k_fold']
-    train_auc_aver /= params['k_fold']
-    test_loss_aver /= params['k_fold']
-    test_acc_aver /= params['k_fold']
-    test_auc_aver /= params['k_fold']
+    # 计算平均值
+    train_acc_aver = train_right / train_total if train_total > 0 else 0.0
+    train_auc_aver = train_auc_total / train_total if train_total > 0 else 0.0
+    test_acc_aver = test_right / test_total if test_total > 0 else 0.0
+    test_auc_aver = test_auc_total / test_total if test_total > 0 else 0.0
 
     print('>>>>>>>>>>>>>>>>>>' + LOG_Y + f" Epoch: {epoch + 1} Average Results " + LOG_END + '<<<<<<<<<<<<<<<<<<')
     print(
-        LOG_G + f'Training Average: loss: {train_loss_aver:.4f}, acc: {train_acc_aver:.4f}, auc: {train_auc_aver:.4f}' + LOG_END)
+        LOG_G + f'Training Average: loss: {train_loss_total:.4f}, acc: {train_acc_aver:.4f}, auc: {train_auc_aver:.4f}' + LOG_END)
     print(
-        LOG_G + f'Testing Average:  loss: {test_loss_aver:.4f}, acc: {test_acc_aver:.4f}, auc: {test_auc_aver:.4f}' + LOG_END)
+        LOG_G + f'Testing Average:  loss: {test_loss_total:.4f}, acc: {test_acc_aver:.4f}, auc: {test_auc_aver:.4f}' + LOG_END)
 
     output_file.write(
-        f'--- epoch {epoch + 1} average | train_loss: {train_loss_aver:.4f}, train_acc: {train_acc_aver:.4f}, train_auc: {train_auc_aver:.4f} | test_loss: {test_loss_aver:.4f}, test_acc: {test_acc_aver:.4f}, test_auc: {test_auc_aver:.4f} ---\n')
+        f'--- epoch {epoch + 1} average | train_loss: {train_loss_total:.4f}, train_acc: {train_acc_aver:.4f}, train_auc: {train_auc_aver:.4f} | test_loss: {test_loss_total:.4f}, test_acc: {test_acc_aver:.4f}, test_auc: {test_auc_aver:.4f} ---\n')
 
     # 1. 检查并保存最佳模型
     if test_auc_aver > max_auc:
