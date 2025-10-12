@@ -379,7 +379,7 @@ class sqgkt(Module):
         emb_sum = (emb_sum_neighbor + emb_self)
         # self.mlps4agg[hop](emb_sum))：将融合后的 emb_sum 通过这个线性层，进行一次仿射变换（W*X + b），这是GCN层中的权重矩阵部分，输出形状不变，仍为 (_batch_size, 3, 100)
         # dropout_gnn正则化；
-        return torch.relu(self.dropout_gnn(self.emb_sum))
+        return torch.relu(self.dropout_gnn(emb_sum))
 
     # 总指挥，简单来说，这里依旧是将所有的信息汇聚在第0跳
     def aggregate_uq(self, emb_node_neighbor , node_neighbors_2):
