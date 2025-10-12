@@ -102,7 +102,8 @@ class sqgkt(Module):
             question_t = question[:, t]
             response_t = response[:, t]
             # 当前时间步的掩码，后续的很多操作只会对mask_t是Ture的进行操作，这里逻辑很简单，用eq进行比较，如果前面mask和后面tensor(1)都是1，就输出Ture，并记录
-            mask_t = torch.eq(mask[:, t], torch.tensor(1))
+            # 增加device=mask.device确保张量在同一设备上
+            mask_t = torch.eq(mask[:, t], torch.tensor(1,device=mask.device))
             # Embedding 是把 0 变成一个低维、稠密的、可学习的向量，比如 [0.12, -0.45, 0.88, ...]（emb_dim维）；把 1 变成另一个 emb_dim 维的向量。
             emb_response_t = self.emb_table_response(response_t)
 
