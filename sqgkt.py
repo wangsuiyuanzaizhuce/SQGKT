@@ -51,9 +51,11 @@ class sqgkt(Module):
         self.emb_table_user = Embedding(num_user, emb_dim)
         self.emb_table_response = Embedding(2, emb_dim)
 
-        self.w_c = nn.Parameter(torch.tensor(0.33, requires_grad=True))
-        self.w_p = nn.Parameter(torch.tensor(0.33, requires_grad=True))
-        self.w_n = nn.Parameter(torch.tensor(0.33, requires_grad=True))
+        self.w1_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
+        self.w2_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
+
+        self.w_p = nn.Parameter(torch.tensor(0.5, requires_grad=True))
+        self.w_n = nn.Parameter(torch.tensor(0.5, requires_grad=True))
 
         self.lstm_linear = Linear(emb_dim * 2, emb_dim * 2)
         self.lstm_cell = LSTMCell(input_size=emb_dim * 2, hidden_size=emb_dim)
@@ -95,6 +97,33 @@ class sqgkt(Module):
             mask_t = torch.eq(mask[:, t], torch.tensor(1))
             emb_response_t = self.emb_table_response(response_t)
 
+            node_neighbors = [question_t[mask_t]]
+            _batch_size = len(node_neighbors[0])
+            for i in range(self.agg_hops):
+                nodes_current = node_neighbors[-1].reshape(-1)
+                neighbor_shape = [_batch_size] + [
+                    (q_neighbor_size if j % 2 == 0 else s_neighbor_size)
+                    for j in range(i + 1)
+                ]
+                if i % 2 == 0:
+                    node_neighbors.append(
+                        self.q_neighbors[nodes_current].reshape(neighbor_shape)
+                    )
+                else:
+                    node_neighbors.append(
+                        self.s_neighbors[nodes_current].reshape(neighbor_shape)
+                    )
+            emb_node_neighbor = []
+            for i, nodes in enumerate(node_neighbors):
+                if i % 2 == 0:
+                    emb_node_neighbor.append(self.emb_table_question(nodes))
+                else:
+                    emb_node_neighbor.append(self.emb_table_skill(nodes))
+            emb0_question_t = self.aggregate(emb_node_neighbor)
+            emb_question_t = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
+            emb_question_t[mask_t] = emb0_question_t
+            emb_question_t[~mask_t] = self.emb_table_question(question_t[~mask_t])
+
             node_neighbors_2 = [user_t[mask_t]]
             _batch_size_2 = len(node_neighbors_2[0])
             for i in range(self.agg_hops):
@@ -122,7 +151,7 @@ class sqgkt(Module):
             emb_question_t_2[mask_t] = emb0_question_t_2
             emb_question_t_2[~mask_t] = self.emb_table_question_2(question_t[~mask_t])
 
-            emb_hat_q = emb_question_t_2
+            emb_hat_q = self.w1_q * emb_question_t + self.w2_q * emb_question_t_2
 
             lstm_input = torch.cat((emb_hat_q, emb_response_t), dim=1)
             lstm_input = self.lstm_linear(lstm_input)
@@ -273,14 +302,13 @@ class sqgkt(Module):
         node_weights = self.uq_table[expanded_user_ids, question_ids, :]
 
         # 分别提取三个因子
-        c_i = node_weights[..., 0].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
         g_p = node_weights[..., 1].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
         g_n = node_weights[..., 2].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
 
         # 计算融合权重 g_ij
         # self.w_c, self.w_p, self.w_n 是标量
         # fusion_weights 的形状: [批次大小, 邻居数, 1]
-        fusion_weights = self.w_c * c_i + self.w_p * g_p + self.w_n * g_n
+        fusion_weights =self.w_p * g_p + self.w_n * g_n
 
         # 将权重应用到邻居嵌入上
         # emb_neighbor 的形状: [批次大小, 邻居数, emb_dim]
