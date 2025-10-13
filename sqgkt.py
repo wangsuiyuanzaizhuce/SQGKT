@@ -49,16 +49,16 @@ class sqgkt(Module):
 
         # requires_grad=True代表他们都是可学习的
         # 融合两个图的时候用到的参数
-        self.w1_q = nn.Parameter(torch.tensor(0.5, requires_grad=True)) 
-        self.w2_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))  
+        self.w1_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
+        self.w2_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
 
         # 针对学生学习能力，尝试因子和提示因子的初始化
-        self.w_c = nn.Parameter(torch.tensor(0.33, requires_grad=True))  
+        self.w_c = nn.Parameter(torch.tensor(0.33, requires_grad=True))
         self.w_p = nn.Parameter(torch.tensor(0.33, requires_grad=True))
         self.w_n = nn.Parameter(torch.tensor(0.33, requires_grad=True))
 
         # LSTM单元的定义，输入是融合后问题的嵌入和作答结果的嵌入拼接起来的，所以这里维度是emb_dim * 2 ，隐藏状态是学生的知识状态和嵌入维度相同
-        self.lstm_cell = LSTMCell(input_size=emb_dim * 2, hidden_size=emb_dim)
+        self.lstm_cell = LSTMCell(input_size=emb_dim, hidden_size=emb_dim)
         # 为GCN的每一个聚合都定义了一个MLP。这是GCN中的权重矩阵 (W)，用于对聚合后的信息进行线性变换。
         # 这里for _ in range(agg_hops)代表，我们不关心序号，只关心执行agg_hops次这件事，
         # 要用ModuleList，因为如果用普通的 Python 列表，PyTorch无法看到这些 Linear 层，这样才可以看到Linear层的偏置和权重，在优化器的时候会更新他们的参数，也能被移动到GPU
@@ -72,7 +72,7 @@ class sqgkt(Module):
         self.MLP_query = Linear(emb_dim, emb_dim)
         self.MLP_key = Linear(emb_dim, emb_dim)
         self.MLP_W = Linear(2 * emb_dim, 1)
-
+        self.fusion_layer = Linear(emb_dim * 2, emb_dim)
         # todo
         # 这两个参数没有被使用，需要进一步查看是什么（和注意力相关）
         # self.attention_weights = torch.nn.Parameter(torch.randn(3, requires_grad=True))
@@ -86,10 +86,8 @@ class sqgkt(Module):
         q_neighbor_size, s_neighbor_size = self.q_neighbors.shape[1], self.s_neighbors.shape[1]
         u_neighbor_size, q_neighbor_size_2 = self.u_neighbors.shape[1], self.q_neighbors_2.shape[1]
 
-        # todo
-        # LSTM的初始隐藏状态，但是从未被使用
-        # h1_pre = torch.nn.init.xavier_uniform_(torch.zeros(self.emb_dim, device=DEVICE).repeat(batch_size, 1))
-        # h2_pre = torch.nn.init.xavier_uniform_(torch.zeros(self.emb_dim, device=DEVICE).repeat(batch_size, 1))
+        h = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
+        c = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
 
         # 创建了一个全0的张量，用来存储每一个时间步t后，LSTM的隐藏状态h_t，这里的sqe_len应该是时间序列（每个步长的历史状态都储存在这里，用一个emb_dim大小的向量表示）
         state_history = torch.zeros(batch_size, seq_len, self.emb_dim, device=DEVICE)
@@ -104,7 +102,8 @@ class sqgkt(Module):
             question_t = question[:, t]
             response_t = response[:, t]
             # 当前时间步的掩码，后续的很多操作只会对mask_t是Ture的进行操作，这里逻辑很简单，用eq进行比较，如果前面mask和后面tensor(1)都是1，就输出Ture，并记录
-            mask_t = torch.eq(mask[:, t], torch.tensor(1))
+            # 增加device=mask.device确保张量在同一设备上
+            mask_t = torch.eq(mask[:, t], torch.tensor(1,device=mask.device))
             # Embedding 是把 0 变成一个低维、稠密的、可学习的向量，比如 [0.12, -0.45, 0.88, ...]（emb_dim维）；把 1 变成另一个 emb_dim 维的向量。
             emb_response_t = self.emb_table_response(response_t)
 
@@ -208,44 +207,62 @@ class sqgkt(Module):
             # self.emb_table_question_2(...): 这会获取这些padding问题的原始嵌入（即没有经过图聚合的、在嵌入表里最原始的向量）
             emb_question_t_2[~mask_t] = self.emb_table_question_2(question_t[~mask_t])
 
-            # todo 确认是否可以更新
             # 融合两种图嵌入（这里权重理论上可以更新）
-            emb_hat_q = self.w1_q * emb_question_t + self.w2_q * emb_question_t_2 
+            emb_hat_q = self.w1_q * emb_question_t + self.w2_q * emb_question_t_2
 
             # 更新学生状态LSTM：emb_hat_q是两个图的融合， emb_response_t是学生回答的正确答案
             # cat是拼接，dim是左右拼接
             # [[ q1, q2, q3, q4,  r1, r2, r3, r4 ],   学生0的完整事件向量
             #  [ q5, q6, q7, q8,  r5, r6, r7, r8 ]]   学生1的完整事件向量
-            lstm_input = torch.cat((emb_hat_q, emb_response_t), dim=1)
-            # todo这里lstmcell只管一步，需要手动传递很多东西，所以不能直接用更简单的LSTM，无法直接解决
-            # 将当前事件 lstm_input 和上一时刻的隐藏状态（lstm_cell内部自动维护）结合，计算出当前时刻的新隐藏状态
-            lstm_output = self.dropout_lstm(self.lstm_cell(lstm_input)[0])  
+            interaction_emb = torch.cat((emb_hat_q, emb_response_t), dim=1)
+            # 经过线性层
+            e_t = F.relu(self.fusion_layer(interaction_emb))
+
+            # todo LSTM增加修改的地方
+            h_prev_masked, c_prev_masked = h[mask_t], c[mask_t]
+            e_t_masked = e_t[mask_t]
+
+            h_next_masked, c_next_masked = self.lstm_cell(e_t_masked, (h_prev_masked, c_prev_masked))
+
+            h_new, c_new = h.clone(), c.clone()
+            h_new[mask_t] = self.dropout_lstm(h_next_masked)
+            c_new[mask_t] = c_next_masked
+
+            h, c = h_new, c_new
+
+            lstm_output = h
+            state_history[:, t] = lstm_output
 
             # 准备下一次预测的问题
             # 核心任务是构建一个张量，该张量完整地描述了下一个挑战是什么。这个挑战由两部分构成：下一个问题 q_next 和 它所关联的所有技能。这个最终的张量将作为预测模块的查询（Query）
             # 获取下一个时间步，所有学生分别要面对的问题ID
+            # todo 这里为了加快效率，替换了逻辑
             q_next = question[:, t + 1]
+            skills_related_list = [self.emb_table_skill(torch.nonzero(s, as_tuple=True)[0]) for s in
+                                   self.qs_table[q_next]]
+            max_num_skill = max(s.shape[0] for s in skills_related_list) if skills_related_list else 0
+
             # 预先构建一个问题-技能的关系表，每一个问题应该对应的都是一个one-hot编码的技能表格
-            skills_related = self.qs_table[q_next]
+            #skills_related = self.qs_table[q_next]
             # 处理变长技能列表 (核心难点)，但是我都用one-hot编码了，那不是都是一个张量表格吗，只是说里面的1的数量不同而已，这是没问题的，但是独热编码只是初始形状，我们还需要提取出来，到底是哪些技能，经过转换之后就不一样了（1，2，6），（2，5）这样
-            skills_related_list = []
-            max_num_skill = 1
-            for i in range(batch_size):
+            #skills_related_list = []
+            #max_num_skill = 1
+            #for i in range(batch_size):
                 # 返回张量中所有非0元素的索引，torch.nonzero(skills_related[0]) 返回 tensor([[1], [5]])；squeeze() 之后，skills_index 变为 tensor([1, 5])。它的长度是 2
-                skills_index = torch.nonzero(skills_related[i]).squeeze()
+                #skills_index = torch.nonzero(skills_related[i]).squeeze()
                 # 经过上面的处理，现在每一个元素都是一个一维张量，并且长度不一样（可能）
                 # 这个是用来处理问题只关联单个技能这个特殊情况的，skills_related[i] 是 [0, 1, 0, 0, 0, 0, 0, 0]。
                 # torch.nonzero(...) 返回一个形状为 (1, 1) 的张量：tensor([[1]])。
                 # .squeeze() 之后，skills_index 会把所有大小为1的维度都移除，结果变成一个零维张量 (Scalar)：tensor(1)
                 # 简单来说，这里就是一个数字/值，根本没有中括号包裹，因为squeeze的问题，导致一层包裹都没有了
-                if len(skills_index.shape) == 0:
+                #if len(skills_index.shape) == 0:
                     # 会输出一个嵌入张量（比如100维），unsqueeze会在指定的维度上增加一个大小为1的维度， dim=0代表在最前面增加一个维度，这里形状就变成了（1，100）
-                    skills_related_list.append(torch.unsqueeze(self.emb_table_skill(skills_index), dim=0))
-                else:
+                    #skills_related_list.append(torch.unsqueeze(self.emb_table_skill(skills_index), dim=0))
+                #else:
                     # 这里添加的是（N，100）张量
-                    skills_related_list.append(self.emb_table_skill(skills_index))
-                    if skills_index.shape[0] > max_num_skill:
-                        max_num_skill = skills_index.shape[0]
+                    #skills_related_list.append(self.emb_table_skill(skills_index))
+                    #if skills_index.shape[0] > max_num_skill:
+                        #max_num_skill = skills_index.shape[0]
 
             # 上面总结下来，是获得了每个学生即将要回答对应的技能，行是学生，列是一个二维张量，第一个维度是问题关联的技能数量，第二个维度是技能的嵌入向量
             # 用来获取每个学生下一个问题的嵌入向量（技能关联图的输出）
@@ -307,6 +324,8 @@ class sqgkt(Module):
             else:
                 # 原本lstm_output形状是（batch_size,emb_dim），变成了（batch_size,1,emb_dim）
                 current_state = lstm_output.unsqueeze(dim=1)
+                # todo 下面一行是新加的（为了加速改的）
+                history_slice = state_history[:, :t].clone()
                 # 历史记录太短了，比要筛选的数量还短
                 if t <= self.rank_k:
                     # 直接拼接起来（batch_size,1,emb_dim）和(batch_size, max_seq_len, emb_dim)，这里的拼接就是除了要拼接的维度之外，其它维度都保持一致
@@ -330,8 +349,9 @@ class sqgkt(Module):
                     # 获取第i个学生的最相关历史时刻索引，一个包含了k个索引的一维张量，例如 tensor([2, 5, 4])
                     # 之后用这个最相关的历史索引去这个学生的历史状态中直接抽取出来当时的状态，比如抽出第2，5，4行，并按照或者顺序合成一个新的张量
                     # 最后的形状是(B，k, emb_dim)，其中 k 是 self.rank_k
-                    select_history = torch.cat(tuple(state_history[i][indices[i]].unsqueeze(dim=0)
-                                                     for i in range(batch_size)), dim=0)
+                    # todo这里为了加快速度，优化了
+                    select_history = history_slice.gather(1, indices.unsqueeze(-1).expand(-1, -1, self.emb_dim))
+                    #select_history = torch.cat(tuple(state_history[i][indices[i]].unsqueeze(dim=0) for i in range(batch_size)), dim=0)
                     # 合并操作，当前状态加上历史状态，沿着第1个维度，最后也就是（B，K+1，emb_dim）
                     current_history_state = torch.cat((current_state, select_history), dim=1)
             # 开始预测，并且储存结果
@@ -346,18 +366,21 @@ class sqgkt(Module):
         for i in range(self.agg_hops):
             for j in range(self.agg_hops - i):
                 emb_node_neighbor[j] = self.sum_aggregate(emb_node_neighbor[j], emb_node_neighbor[j + 1], j)
-        # self.MLP_AGG_last经过线性层计算后的新张量，形状通常保持不变，仍为 (_batch_size, 100)；tanh 函数 (双曲正切函数) 会将输入张量中的每一个元素值都映射到 (-1, 1) 的区间内。
-        return torch.tanh(self.MLP_AGG_last(emb_node_neighbor[0]))
+        # self.MLP_AGG_last经过线性层计算后的新张量，形状通常保持不变，仍为 (_batch_size, 100)；relu 函数 (双曲正切函数) 会将输入张量中的每一个元素值都映射到 (-1, 1) 的区间内。
+        return torch.relu(self.MLP_AGG_last(emb_node_neighbor[0]))
 
     # 邻居跳之间融合用的
     def sum_aggregate(self, emb_self, emb_neighbor, hop):
+        # 先变换：对每个邻居的嵌入独立应用线性变换(W * X + b)
+        # self.mlps4agg[hop] 会作用于 emb_neighbor 的最后一个维度 (emb_dim)。
+        transformed_neighbors = self.mlps4agg[hop](emb_neighbor)
         # 比如现在是(_batch_size, 3, 4, 100)；torch.mean 会沿着倒数第二个维度计算平均值。这意味着，对于每个一跳邻居，它会把它所有（4个）二跳邻居的嵌入向量取平均，融合成一个单一的嵌入向量
-        emb_sum_neighbor = torch.mean(emb_neighbor, dim=-2)
+        emb_sum_neighbor = torch.mean(transformed_neighbors, dim=-2)
         # 直接逐元素相加。融合后的结果，形状不变，仍为 (_batch_size, 3, 100)
         emb_sum = (emb_sum_neighbor + emb_self)
         # self.mlps4agg[hop](emb_sum))：将融合后的 emb_sum 通过这个线性层，进行一次仿射变换（W*X + b），这是GCN层中的权重矩阵部分，输出形状不变，仍为 (_batch_size, 3, 100)
         # dropout_gnn正则化；
-        return torch.tanh(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
+        return torch.relu(self.dropout_gnn(emb_sum))
 
     # 总指挥，简单来说，这里依旧是将所有的信息汇聚在第0跳
     def aggregate_uq(self, emb_node_neighbor , node_neighbors_2):
@@ -367,7 +390,7 @@ class sqgkt(Module):
                     emb_node_neighbor[j] = self.sum_aggregate(emb_node_neighbor[j], emb_node_neighbor[j + 1], j)
                 else:
                     emb_node_neighbor[j] = self.sum_aggregate_uq(emb_node_neighbor[j], emb_node_neighbor[j + 1], node_neighbors_2[j], node_neighbors_2[j + 1], j)
-        return torch.tanh(self.MLP_AGG_last(emb_node_neighbor[0]))
+        return torch.relu(self.MLP_AGG_last(emb_node_neighbor[0]))
 
 
 
@@ -419,14 +442,15 @@ class sqgkt(Module):
         g_n = node_weights[..., 2].unsqueeze(-1)
 
         fusion_weights = self.w_c * c_i + self.w_p * g_p + self.w_n * g_n
-        print(fusion_weights.shape)
 
         weighted_neighbor_embs = emb_neighbor * fusion_weights
+        # 先变换：对每个加权后的邻居嵌入应用线性变换。
+        transformed_weighted_neighbors = self.mlps4agg[hop](weighted_neighbor_embs)
 
-        weighted_emb_neighbor_sum = torch.mean(weighted_neighbor_embs, dim=-2)
+        weighted_emb_neighbor_sum = torch.mean(transformed_weighted_neighbors, dim=-2)
 
         emb_sum = emb_self + weighted_emb_neighbor_sum
-        return torch.tanh(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
+        return torch.relu(self.dropout_gnn(emb_sum))
 
     def recap_hard(self, q_next, q_history):
         # 批次数目
@@ -514,5 +538,4 @@ class sqgkt(Module):
         # 第一层sum是对M（问题-技能维度上求和），第二个sum是对N（知识状态的维度上求和）
         p = torch.sum(torch.sum(alpha * output_g, dim=1), dim=1)
         # 输出最终的概率：Sigmoid 函数可以将任意的实数分数 p 压缩到 (0, 1)
-        result = torch.sigmoid(torch.squeeze(p, dim=-1))
-        return result
+        return p
