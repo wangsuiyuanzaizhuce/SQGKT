@@ -2,236 +2,142 @@ import pandas as pd
 import numpy as np
 import os
 from scipy import sparse
-from scipy.stats import poisson
+from scipy.stats import norm, poisson
 
-# --- 全局参数 ---
 min_seq_len = 20
 max_seq_len = 200
 k = 0.3
 d = 0.7
 b = 10
-weights = np.array([0.4, 0.4, 0.2])
-
-
-def ensure_dir(directory):
-    """确保目录存在"""
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
 
 if __name__ == '__main__':
-    print("Starting data processing...")
-    ensure_dir('data')
-
-    # --- 1. 加载和初步清洗数据 ---
-    try:
-        data = pd.read_csv(filepath_or_buffer='data/skill_builder_data_corrected_collapsed.csv',
-                           encoding="ISO-8859-1", low_memory=False)
-    except FileNotFoundError:
-        print("Error: 'skill_builder_data_corrected_collapsed.csv' not found in 'data/' directory.")
-        exit()
-
-    # 数据清洗
+    data = pd.read_csv(filepath_or_buffer='data/assist09_origin.csv', encoding="ISO-8859-1")
     data = data.sort_values(by='user_id', ascending=True)
-    data.dropna(subset=['skill_id', 'problem_id', 'user_id'], inplace=True)
-    data = data[data['skill_id'] != ' ']
-    data = data[data['original'] == 1]  # 只保留首次尝试
-
-    # 筛选有效长度的用户序列
+    data = data.drop(data[data['skill_id'] == ' '].index)
+    data = data.dropna(subset=['skill_id'])
+    data = data.drop(data[data['original'] == 0].index)
     is_valid_user = data.groupby('user_id').size() >= min_seq_len
     data = data[data['user_id'].isin(is_valid_user[is_valid_user].index)]
+    data = data.loc[:, ['order_id', 'user_id', 'problem_id', 'correct', 'skill_id', 'skill_name',
+                        'ms_first_response', 'answer_type', 'attempt_count','hint_count']]
+    question_attempt_stats = data.groupby('problem_id')['attempt_count'].mean().reset_index()
+    question_attempt_stats.rename(columns={'attempt_count': 'mean_attempt'}, inplace=True)
+    data = pd.merge(data, question_attempt_stats, on='problem_id', suffixes=('', '_attempt'))
+    data['attempt_factor'] = 1 - poisson(data['mean_attempt']).cdf(data['attempt_count'] - 1)
+    data['attempt_factor_g'] = k + (1 - k) / (1 + np.exp(-d * (data['attempt_factor'] - b)))
 
-    data = data.loc[:, ['order_id', 'user_id', 'problem_id', 'correct', 'skill_id',
-                        'attempt_count', 'hint_count']]
-    print(f"Data cleaned. Rows: {len(data)}")
 
-    # --- 2. 计算特征因子 ---
-    print("Calculating feature factors...")
+    question_hint_stats = data.groupby('problem_id')['hint_count'].agg('mean').reset_index()
+    question_hint_stats.rename(columns={'hint_count': 'mean_hint'}, inplace=True)
+    data = pd.merge(data, question_hint_stats, on='problem_id')
 
-    # 尝试次数因子
-    question_attempt_stats = data.groupby('problem_id')['attempt_count'].mean().rename('mean_attempt')
-    data = data.join(question_attempt_stats, on='problem_id')
-    with np.errstate(divide='ignore', invalid='ignore'):
-        attempt_factor = 1 - poisson(data['mean_attempt']).cdf(data['attempt_count'] - 1)
-    data['attempt_factor_g'] = k + (1 - k) / (1 + np.exp(-d * (attempt_factor - b)))
-
-    # 提示因子
-    question_hint_stats = data.groupby('problem_id')['hint_count'].mean().rename('mean_hint')
-    data = data.join(question_hint_stats, on='problem_id')
-    with np.errstate(divide='ignore', invalid='ignore'):
-        hint_factor = 1 - poisson(data['mean_hint']).cdf(data['hint_count'] - 1)
-    data['hint_factor_g'] = k + (1 - k) / (1 + np.exp(-d * (hint_factor - b)))
-
-    # 学生能力因子
+    # data['hint_count'] = data['hint_count']
+    #CDF
+    data['hint_factor'] = 1 - poisson(data['mean_hint']).cdf(data['hint_count'] - 1)
+    data['hint_factor_g'] = k + (1 - k) / (1 + np.exp(-d * (data['hint_factor'] - b)))
     data['ability_factor'] = data.groupby('user_id')['correct'].transform('mean')
-    data.fillna(0, inplace=True)
 
-    print("Feature calculation complete.")
+    num_answer = data.shape[0]
+    questions = set()
+    skills = set()
+    users = set()
 
-    # --- 3. 保存处理后的数据 ---
+    for row in data.itertuples(index=False):
+        users.add(row[1])
+        questions.add(row[2])
+        if isinstance(row[4], (int, float)):
+            skills.add(int(row[4]))
+        else:
+            skill_add = set(int(s) for s in row[4].split('_'))
+            skills = skills.union(skill_add)
     data.to_csv('data/data_processed.csv', sep=',', index=False)
-    print("data_processed.csv saved.")
 
-    # --- 4. 创建ID到索引的映射 ---
-    print("Building ID to Index mappings...")
-    unique_users = data['user_id'].unique()
-    unique_questions = data['problem_id'].unique()
+    num_q = len(questions)
+    num_s = len(skills)
+    num_user = len(users)
+    if not os.path.exists('data/question2idx.npy'):
 
-    unique_skills = set()
-    data['skill_id'].astype(str).str.split('_').apply(unique_skills.update)
-    unique_skills = sorted([int(float(s)) for s in unique_skills if s])
+        questions = list(questions)
+        skills = list(skills)
+        users = list(users)
+        question2idx = {questions[i]: i + 1 for i in range(num_q)}
+        question2idx[0] = 0
+        skill2idx = {skills[i]: i for i in range(num_s)}
+        user2idx = {users[i]: i for i in range(num_user)}
+        num_q += 1
+        idx2question = {question2idx[q]: q for q in question2idx}
+        idx2skill = {skill2idx[s]: s for s in skill2idx}
+        idx2user = {user2idx[u]: u for u in user2idx}
 
-    num_user = len(unique_users)
-    num_q = len(unique_questions)
-    num_s = len(unique_skills)
+        np.save('data/question2idx.npy', question2idx)
+        np.save('data/skill2idx.npy', skill2idx)
+        np.save('data/user2idx.npy', user2idx)
+        np.save('data/idx2question.npy', idx2question)
+        np.save('data/idx2skill.npy', idx2skill)
+        np.save('data/idx2user.npy', idx2user)
+    else:
+        question2idx = np.load('data/question2idx.npy', allow_pickle=True).item()
+        skill2idx = np.load('data/skill2idx.npy', allow_pickle=True).item()
+        user2idx = np.load('data/user2idx.npy', allow_pickle=True).item()
+        idx2question = np.load('data/idx2question.npy', allow_pickle=True).item()
+        idx2skill = np.load('data/idx2skill.npy', allow_pickle=True).item()
+        idx2user = np.load('data/idx2user.npy', allow_pickle=True).item()
 
-    user2idx = {uid: i for i, uid in enumerate(unique_users)}
-    question2idx = {qid: i + 1 for i, qid in enumerate(unique_questions)}
-    question2idx[0] = 0  # Padding token
-    skill2idx = {sid: i for i, sid in enumerate(unique_skills)}
-
-    num_q_total = num_q + 1
-
-    print(f"Total Users: {num_user}, Total Questions: {num_q} (+1 padding), Total Skills: {num_s}")
-
-    # 保存所有映射文件
-    np.save('data/question2idx.npy', question2idx)
-    np.save('data/skill2idx.npy', skill2idx)
-    np.save('data/user2idx.npy', user2idx)
-    np.save('data/idx2question.npy', {v: k for k, v in question2idx.items()})
-    np.save('data/idx2skill.npy', {v: k for k, v in skill2idx.items()})
-    np.save('data/idx2user.npy', {v: k for k, v in user2idx.items()})
-    print("Mapping files saved.")
-
-    # --- 5. 生成 Question-Skill 关系表 ---
+    #row[1]:user_id, row[2]:problem_id, row[4]:skill_id
     if not os.path.exists('data/qs_table.npz'):
-        print("Building Question-Skill table (qs_table)...")
-        qs_table = np.zeros([num_q_total, num_s], dtype=np.int8)
-
-        q_skill_map = data[['problem_id', 'skill_id']].drop_duplicates('problem_id')
-
-        for _, row in q_skill_map.iterrows():
-            q_idx = question2idx[row['problem_id']]
-            skills = str(row['skill_id']).split('_')
-            for s_str in skills:
-                try:
-                    s_id = int(float(s_str))
-                    if s_id in skill2idx:
-                        s_idx = skill2idx[s_id]
-                        qs_table[q_idx, s_idx] = 1
-                except ValueError:
-                    continue
-
-        # 保存 qs_table 和相关的关系表
-        sparse_qs_table = sparse.csr_matrix(qs_table)
+        qs_table = np.zeros([num_q, num_s], dtype=float)
+        q_set = data['problem_id'].drop_duplicates()
+        q_samples = pd.concat([data[data['problem_id'] == q_id].sample(1) for q_id in q_set])
+        for row in q_samples.itertuples(index=False):
+            if isinstance(row[4], (int, float)):
+                qs_table[question2idx[row[2]], skill2idx[int(row[4])]] = 1
+            else:
+                skill_add = [int(s) for s in row[4].split('_')]
+                for s in skill_add:
+                    qs_table[question2idx[row[2]], skill2idx[s]] = 1
         qq_table = np.matmul(qs_table, qs_table.T)
         ss_table = np.matmul(qs_table.T, qs_table)
-
-        sparse.save_npz('data/qs_table.npz', sparse_qs_table)
-        sparse.save_npz('data/qq_table.npz', sparse.csr_matrix(qq_table))
-        sparse.save_npz('data/ss_table.npz', sparse.csr_matrix(ss_table))
-        print("qs_table.npz, qq_table.npz, ss_table.npz saved.")
+        qs_table = sparse.coo_matrix(qs_table)
+        qq_table = sparse.coo_matrix(qq_table)
+        ss_table = sparse.coo_matrix(ss_table)
+        sparse.save_npz('data/qs_table.npz', qs_table)
+        sparse.save_npz('data/qq_table.npz', qq_table)
+        sparse.save_npz('data/ss_table.npz', ss_table)
     else:
-        print("Question-Skill tables already exist.")
-
-    # --- 6. 生成 User-Question 关系表 (3D版本) ---
-    if not os.path.exists('data/uq_table.npy'):
-        print("Building 3D User-Question table (uq_table.npy)...")
-        uq_table_3d = np.zeros([num_user, num_q_total, 3], dtype=np.float32)
-
-        for _, row in data.iterrows():
-            u_idx = user2idx[row['user_id']]
-            q_idx = question2idx[row['problem_id']]
-
-            uq_table_3d[u_idx, q_idx, 0] = row['ability_factor']
-            uq_table_3d[u_idx, q_idx, 1] = row['attempt_factor_g']
-            uq_table_3d[u_idx, q_idx, 2] = row['hint_factor_g']
-
-        np.save('data/uq_table.npy', uq_table_3d)
-        print("uq_table.npy saved.")
-    else:
-        print("uq_table.npy already exists.")
-
-    # --- 7. 生成 User-Question 关系表 (2D稀疏版本) ---
+        qs_table = sparse.load_npz('data/qs_table.npz').toarray()
+        qq_table = sparse.load_npz('data/qq_table.npz').toarray()
+        ss_table = sparse.load_npz('data/ss_table.npz').toarray()
+    weights = np.array([0.4, 0.4, 0.2])
     if not os.path.exists('data/uq_table.npz'):
-        print("Building 2D User-Question table (uq_table.npz)...")
-        uq_table_2d = np.zeros([num_user, num_q_total], dtype=np.float32)
-
-        for _, row in data.iterrows():
-            u_idx = user2idx[row['user_id']]
-            q_idx = question2idx[row['problem_id']]
-
-            factors = np.array([row['attempt_factor_g'], row['hint_factor_g'], row['ability_factor']])
+        uq_table = np.zeros([num_user, num_q], dtype=float)
+        u_set = data['user_id'].drop_duplicates()
+        u_samples = pd.concat([data[data['user_id'] == u_id].sample(1) for u_id in u_set])
+        for row in u_samples.itertuples(index=False):
+            user_index = user2idx[row[1]]
+            question_index = question2idx[row[2]]
+            factors = np.array([row.attempt_factor_g, row.hint_factor_g, row.ability_factor])
             factor_value = np.sum(factors * weights)
-            uq_table_2d[u_idx, q_idx] = factor_value
-
-        sparse_uq_table = sparse.csr_matrix(uq_table_2d)
-        sparse.save_npz('data/uq_table.npz', sparse_uq_table)
-        print("uq_table.npz saved.")
+            uq_table[user2idx[row[1]], question2idx[(row[2])]] = factor_value
+        uq_table = sparse.coo_matrix(uq_table)
+        sparse.save_npz('data/uq_table.npz', uq_table)
     else:
-        print("uq_table.npz already exists.")
+        uq_table = sparse.load_npz('data/uq_table.npz').toarray()
 
-    # --- 8. 生成用户序列数据 ---
     if not os.path.exists('data/user_seq.npy'):
-        print("Building user sequence data...")
-
-        # 确保数据按用户和时间排序
-        data = data.sort_values(by=['user_id', 'order_id'])
-
-        # 初始化序列数组
-        user_seq = np.zeros([num_user, max_seq_len], dtype=np.int32)
-        user_res = np.zeros([num_user, max_seq_len], dtype=np.int32)
-        user_mask = np.zeros([num_user, max_seq_len], dtype=np.int32)
-        user_user = np.zeros([num_user, max_seq_len], dtype=np.int32)
-
-        # 为每个用户构建序列
-        for user_id in unique_users:
-            u_idx = user2idx[user_id]
-            user_data = data[data['user_id'] == user_id].head(max_seq_len)
-
-            seq_len = len(user_data)
-            if seq_len > 0:
-                user_seq[u_idx, :seq_len] = user_data['problem_id'].map(question2idx).values
-                user_res[u_idx, :seq_len] = user_data['correct'].values
-                user_mask[u_idx, :seq_len] = 1
-                user_user[u_idx, :seq_len] = u_idx
-
-        # 保存所有序列文件
+        user_seq = np.zeros([num_user, max_seq_len])
+        user_res = np.zeros([num_user, max_seq_len])
+        user_user = np.zeros([num_user, max_seq_len])
+        num_seq = [0 for _ in range(num_user)]
+        user_mask = np.zeros([num_user, max_seq_len])
+        for row in data.itertuples(index=False):
+            user_id = user2idx[row[1]]
+            if num_seq[user_id] < max_seq_len - 1:
+                user_seq[user_id, num_seq[user_id]] = question2idx[row[2]]
+                user_res[user_id, num_seq[user_id]] = row[3]
+                user_mask[user_id, num_seq[user_id]] = 1
+                user_user[user_id, num_seq[user_id]] = user_id
+                num_seq[user_id] += 1
         np.save('data/user_seq.npy', user_seq)
         np.save('data/user_res.npy', user_res)
         np.save('data/user_mask.npy', user_mask)
-        np.save('data/user_user.npy', user_user)
-        print("User sequence files saved.")
-    else:
-        print("User sequence files already exist.")
-
-    # --- 9. 生成统一的用户记录文件 ---
-    if not os.path.exists('data/user_records.npy'):
-        print("Building unified user records...")
-        user_records = np.zeros([num_user, max_seq_len, 4], dtype=np.int32)
-
-        for user_id in unique_users:
-            u_idx = user2idx[user_id]
-            user_data = data[data['user_id'] == user_id].head(max_seq_len)
-            seq_len = len(user_data)
-
-            if seq_len > 0:
-                user_records[u_idx, :seq_len, 0] = u_idx
-                user_records[u_idx, :seq_len, 1] = user_data['problem_id'].map(question2idx).values
-                user_records[u_idx, :seq_len, 2] = user_data['correct'].values
-                user_records[u_idx, :seq_len, 3] = 1
-
-        np.save('data/user_records.npy', user_records)
-        print("user_records.npy saved.")
-    else:
-        print("user_records.npy already exists.")
-
-    print("\n=== All files processed successfully! ===")
-    print("Generated files:")
-    print("- data_processed.csv")
-    print("- question2idx.npy, skill2idx.npy, user2idx.npy")
-    print("- idx2question.npy, idx2skill.npy, idx2user.npy")
-    print("- qs_table.npz, qq_table.npz, ss_table.npz")
-    print("- uq_table.npy (3D), uq_table.npz (2D sparse)")
-    print("- user_seq.npy, user_res.npy, user_mask.npy, user_user.npy")
-    print("- user_records.npy")
+        np.save('data/user_user.npy', user_mask)
