@@ -51,9 +51,6 @@ class sqgkt(Module):
         self.emb_table_user = Embedding(num_user, emb_dim)
         self.emb_table_response = Embedding(2, emb_dim)
 
-        self.w1_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
-        self.w2_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
-
         self.w_c = nn.Parameter(torch.tensor(0.33, requires_grad=True))
         self.w_p = nn.Parameter(torch.tensor(0.33, requires_grad=True))
         self.w_n = nn.Parameter(torch.tensor(0.33, requires_grad=True))
@@ -98,33 +95,6 @@ class sqgkt(Module):
             mask_t = torch.eq(mask[:, t], torch.tensor(1))
             emb_response_t = self.emb_table_response(response_t)
 
-            node_neighbors = [question_t[mask_t]]
-            _batch_size = len(node_neighbors[0])
-            for i in range(self.agg_hops):
-                nodes_current = node_neighbors[-1].reshape(-1)
-                neighbor_shape = [_batch_size] + [
-                    (q_neighbor_size if j % 2 == 0 else s_neighbor_size)
-                    for j in range(i + 1)
-                ]
-                if i % 2 == 0:
-                    node_neighbors.append(
-                        self.q_neighbors[nodes_current].reshape(neighbor_shape)
-                    )
-                else:
-                    node_neighbors.append(
-                        self.s_neighbors[nodes_current].reshape(neighbor_shape)
-                    )
-            emb_node_neighbor = []
-            for i, nodes in enumerate(node_neighbors):
-                if i % 2 == 0:
-                    emb_node_neighbor.append(self.emb_table_question(nodes))
-                else:
-                    emb_node_neighbor.append(self.emb_table_skill(nodes))
-            emb0_question_t = self.aggregate(emb_node_neighbor)
-            emb_question_t = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
-            emb_question_t[mask_t] = emb0_question_t
-            emb_question_t[~mask_t] = self.emb_table_question(question_t[~mask_t])
-
             node_neighbors_2 = [user_t[mask_t]]
             _batch_size_2 = len(node_neighbors_2[0])
             for i in range(self.agg_hops):
@@ -152,7 +122,7 @@ class sqgkt(Module):
             emb_question_t_2[mask_t] = emb0_question_t_2
             emb_question_t_2[~mask_t] = self.emb_table_question_2(question_t[~mask_t])
 
-            emb_hat_q = self.w1_q * emb_question_t + self.w2_q * emb_question_t_2
+            emb_hat_q = emb_question_t_2
 
             lstm_input = torch.cat((emb_hat_q, emb_response_t), dim=1)
             lstm_input = self.lstm_linear(lstm_input)
