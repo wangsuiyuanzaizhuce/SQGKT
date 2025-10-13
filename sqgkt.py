@@ -54,9 +54,6 @@ class sqgkt(Module):
         self.w1_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
         self.w2_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
 
-        self.w_c = nn.Parameter(torch.tensor(0.5, requires_grad=True))
-        self.w_p = nn.Parameter(torch.tensor(0.5, requires_grad=True))
-
         self.lstm_linear = Linear(emb_dim * 2, emb_dim * 2)
         self.lstm_cell = LSTMCell(input_size=emb_dim * 2, hidden_size=emb_dim)
         self.mlps4agg = ModuleList(Linear(emb_dim, emb_dim) for _ in range(agg_hops))
@@ -146,7 +143,7 @@ class sqgkt(Module):
                     emb_node_neighbor_2.append(self.emb_table_user(nodes))
                 else:
                     emb_node_neighbor_2.append(self.emb_table_question_2(nodes))
-            emb0_question_t_2 = self.aggregate_uq(emb_node_neighbor_2, node_neighbors_2)
+            emb0_question_t_2 = self.aggregate_uq(emb_node_neighbor_2)
             emb_question_t_2 = torch.zeros(batch_size, self.emb_dim, device=DEVICE)
             emb_question_t_2[mask_t] = emb0_question_t_2
             emb_question_t_2[~mask_t] = self.emb_table_question_2(question_t[~mask_t])
@@ -257,74 +254,13 @@ class sqgkt(Module):
         emb_sum = emb_sum_neighbor + emb_self
         return torch.relu(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
 
-    def aggregate_uq(self, emb_node_neighbor, id_node_neighbor):
+    def aggregate_uq(self, emb_node_neighbor):
         for i in range(self.agg_hops):
             for j in range(self.agg_hops - i):
-                if j % 2 == 0:
-                    emb_node_neighbor[j] = self.sum_aggregate_uq(
-                        emb_node_neighbor[j],
-                        emb_node_neighbor[j + 1],
-                        j,
-                        id_node_neighbor[j],
-                        id_node_neighbor[j + 1],
-                    )
-                else:
                     emb_node_neighbor[j] = self.sum_aggregate(
                         emb_node_neighbor[j], emb_node_neighbor[j + 1], j
                     )
         return torch.relu(self.MLP_AGG_last(emb_node_neighbor[0]))
-
-    def sum_aggregate_uq(self, emb_self, emb_neighbor, hop, self_ids, neighbor_ids):
-        """
-        :param emb_self: 中心节点的嵌入, shape: [num_center_nodes, emb_dim]
-        :param emb_neighbor: 邻居节点的嵌入, shape: [num_center_nodes, neighbor_size, emb_dim]
-        :param hop: 当前的聚合层数
-        :param self_ids: 中心节点的全局ID, shape: [num_center_nodes]
-        :param neighbor_ids: 邻居节点的全局ID, shape: [num_center_nodes, neighbor_size]
-        """
-        # 在 User-Question Graph 中，中心节点是 User，邻居是 Question
-        user_ids = self_ids
-        question_ids = neighbor_ids
-
-        # 使用PyTorch高级索引，一次性、高效地获取所有需要的特征
-        # uq_table[user_ids, :, :] -> [num_center_nodes, num_questions, 3]
-        # .gather(...) -> 根据 question_ids 在第二维度上选取正确的特征
-        # user_ids.unsqueeze(-1).expand(-1, question_ids.shape[1]) -> 构造用于gather的索引
-
-        # 扩展 user_ids 以匹配 question_ids 的形状，用于索引
-        expanded_user_ids = user_ids.unsqueeze(1).expand_as(question_ids)
-
-        # 直接使用高级索引从 self.uq_table 中批量获取权重
-        # self.uq_table 的形状: [全局用户数, 全局问题数, 3]
-        # expanded_user_ids 的形状: [批次大小, 邻居数]
-        # question_ids 的形状: [批次大小, 邻居数]
-        # node_weights 的形状将是: [批次大小, 邻居数, 3]
-        node_weights = self.uq_table[expanded_user_ids, question_ids, :]
-
-        # 分别提取三个因子
-        c_i = node_weights[..., 0].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
-        g_p = node_weights[..., 1].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
-
-        # 计算融合权重 g_ij
-        # self.w_c, self.w_p, self.w_n 是标量
-        # fusion_weights 的形状: [批次大小, 邻居数, 1]
-        fusion_weights = self.w_c * c_i + self.w_p * g_p
-
-        # 将权重应用到邻居嵌入上
-        # emb_neighbor 的形状: [批次大小, 邻居数, emb_dim]
-        # fusion_weights 广播后与 emb_neighbor 相乘
-        weighted_neighbor_embs = emb_neighbor * fusion_weights
-
-        # 对加权后的邻居嵌入求平均
-        weighted_emb_neighbor_sum = torch.mean(
-            weighted_neighbor_embs, dim=1
-        )  # Shape: [批次大小, emb_dim]
-
-        # 与自身嵌入相加
-        emb_sum = emb_self + weighted_emb_neighbor_sum
-
-        # 应用MLP和激活函数
-        return torch.relu(self.dropout_gnn(self.mlps4agg[hop](emb_sum)))
 
     def recap_hard(self, q_next, q_history):
         batch_size = q_next.shape[0]
