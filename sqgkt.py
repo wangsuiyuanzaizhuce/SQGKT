@@ -55,7 +55,7 @@ class sqgkt(Module):
         self.w2_q = nn.Parameter(torch.tensor(0.5, requires_grad=True))
 
         self.w_c = nn.Parameter(torch.tensor(0.5, requires_grad=True))
-        self.w_n = nn.Parameter(torch.tensor(0.5, requires_grad=True))
+        self.w_p = nn.Parameter(torch.tensor(0.5, requires_grad=True))
 
         self.lstm_linear = Linear(emb_dim * 2, emb_dim * 2)
         self.lstm_cell = LSTMCell(input_size=emb_dim * 2, hidden_size=emb_dim)
@@ -303,12 +303,12 @@ class sqgkt(Module):
 
         # 分别提取三个因子
         c_i = node_weights[..., 0].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
-        g_n = node_weights[..., 2].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
+        g_p = node_weights[..., 1].unsqueeze(-1)  # Shape: [批次大小, 邻居数, 1]
 
         # 计算融合权重 g_ij
         # self.w_c, self.w_p, self.w_n 是标量
         # fusion_weights 的形状: [批次大小, 邻居数, 1]
-        fusion_weights = self.w_c * c_i + self.w_n * g_n
+        fusion_weights = self.w_c * c_i + self.w_p * g_p
 
         # 将权重应用到邻居嵌入上
         # emb_neighbor 的形状: [批次大小, 邻居数, emb_dim]
