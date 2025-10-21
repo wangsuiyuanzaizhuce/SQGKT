@@ -295,7 +295,7 @@ class sqgkt(Module):
         Q = torch.tanh(self.MLP_key(qs_concat2))
         tmp = self.MLP_W(torch.cat((Q, K), dim=-1))
         tmp = torch.squeeze(tmp, dim=-1)
-        alpha = torch.softmax(tmp, dim=2)
+        alpha = torch.sigmoid(tmp, dim=2)
         p = torch.sum(torch.sum(alpha * output_g, dim=1), dim=1)
         result = torch.sigmoid(torch.squeeze(p, dim=-1))
         return result
