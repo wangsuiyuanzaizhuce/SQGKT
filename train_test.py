@@ -224,6 +224,10 @@ for fold_idx, (train_indices, test_indices) in enumerate(kf.split(indices), star
             )
             y_hat = model(u, x, y_target, mask)
             y_hat = torch.masked_select(y_hat, mask)
+
+            train_all_targets.extend(y_target.detach().cpu().numpy())
+            train_all_preds.extend(y_hat.detach().cpu().numpy())
+
             y_pred = torch.ge(y_hat, torch.tensor(0.5, device=DEVICE)).to(torch.int)
             y_target = torch.masked_select(y_target, mask)
             loss = loss_fun(y_hat, y_target.to(torch.float32))
@@ -243,8 +247,7 @@ for fold_idx, (train_indices, test_indices) in enumerate(kf.split(indices), star
             log_file.write(
                 f"train batch: {train_batch}, loss: {loss.item():.4f}, acc: {acc.item():.4f}, auc: {auc:.4f}\n"
             )
-            train_all_targets.extend(y_target.detach().cpu().numpy())
-            train_all_preds.extend(y_hat.detach().cpu().numpy())
+
         train_end_time = time.time()
 
         train_loss = train_loss / max(train_batch, 1)
@@ -269,7 +272,8 @@ for fold_idx, (train_indices, test_indices) in enumerate(kf.split(indices), star
         log_file.write("-------------------testing------------------\n")
         test_batch = test_loss = test_total = test_right = test_auc = 0
 
-        test_all_targets = test_all_preds = []
+        test_all_targets = []
+        test_all_preds = []
 
         model.eval()
         test_start_time = time.time()
@@ -282,8 +286,11 @@ for fold_idx, (train_indices, test_indices) in enumerate(kf.split(indices), star
                     data[:, :, 3].to(torch.bool).to(DEVICE),
                 )
                 y_hat = model(u, x, y_target, mask)
-
                 y_hat = torch.masked_select(y_hat, mask.to(torch.bool))
+
+                test_all_targets.extend(y_target.detach().cpu().numpy())
+                test_all_preds.extend(y_hat.detach().cpu().numpy())
+
                 y_pred = torch.ge(y_hat, torch.tensor(0.5, device=DEVICE)).to(torch.int)
                 y_target = torch.masked_select(y_target, mask.to(torch.bool))
                 loss = loss_fun(y_hat, y_target.to(torch.float32))
@@ -300,8 +307,6 @@ for fold_idx, (train_indices, test_indices) in enumerate(kf.split(indices), star
                 log_file.write(
                     f"test batch: {test_batch}, loss: {loss.item():.4f}, acc: {acc.item():.4f}, auc: {auc:.4f}\n"
                 )
-                test_all_targets.extend(y_target.detach().cpu().numpy())
-                test_all_preds.extend(y_hat.detach().cpu().numpy())
             test_end_time = time.time()
 
         test_loss = test_loss / max(test_batch, 1)
